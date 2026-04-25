@@ -1,0 +1,27 @@
+# Local Codex/session files
+.codex
+
+# Environment files
+.env
+.env.*
+
+# Logs and runtime output
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
