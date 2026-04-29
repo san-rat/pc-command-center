@@ -9,16 +9,21 @@ instead of clearing and repainting the whole screen on every refresh.
 
 ## Features
 
-- Compact terminal view for system usage, network status, and top processes
+- Compact terminal view for system usage, health, network status, and top processes
 - Current user, hostname, date/time, and uptime
 - CPU usage calculated from `/proc/stat` deltas between refresh ticks
 - RAM usage from `free`
 - Root disk usage from `df`
+- Load average from `/proc/loadavg`
+- Process count from `ps`
+- Swap usage from `free`
+- Root disk free space from `df`
 - CPU/system temperature when available
 - Active IPv4 network interfaces
 - Default gateway
 - Top processes sorted by CPU usage
 - Status colors for healthy, warning, and high-usage values
+- Responsive compact, mini, micro, and tiny views for smaller terminals
 - Keyboard controls for quitting, refreshing, and changing refresh speed
 - Optional one-shot output mode for quick checks or scripts
 - Optional wide layout for larger terminal windows
@@ -34,6 +39,7 @@ tools that are usually available by default:
 - `date`
 - `df`
 - `free`
+- `getconf`
 - `grep`
 - `head`
 - `hostname`
@@ -43,6 +49,7 @@ tools that are usually available by default:
 - `stty`
 - `tput`
 - `uptime`
+- `wc`
 - `whoami`
 
 Optional:
@@ -104,10 +111,22 @@ The live dashboard enters the terminal alternate screen, hides the cursor, and
 redraws from the top-left position with `tput`. It restores the terminal when
 the app exits.
 
-By default, the dashboard caps its rendered width at 88 columns so it fits well
-in a 1/4-screen terminal on a 1920x1080 display. The compact layout adapts to
-shorter terminal heights by showing fewer process rows and collapsing network
-details onto one line. Use `--wide` when you want the larger panel layout.
+By default, the dashboard caps its compact rendered width at 88 columns so it
+fits well in a 1/4-screen terminal on a 1920x1080 display. The compact view uses
+short sections named `SYS`, `HLT`, `NET`, and `TOP`. The `HLT` section shows
+load average, process count, swap usage, and root disk free space.
+
+When the terminal shrinks below the compact target, the dashboard switches
+automatically:
+
+- `COMPACT` keeps system, health, network, and process sections.
+- `MINI` keeps core system health, swap/root free space, and one top process.
+- `MICRO` keeps CPU, RAM, disk, temperature, load, swap, and short controls.
+- Very tiny terminals fall back to CPU, RAM, disk, and `q/r`.
+
+The live dashboard checks terminal dimensions during the event loop and redraws
+when the window size changes. Use `--wide` when you want the larger panel
+layout.
 
 CPU usage no longer waits for a blocking 1-second sample inside each refresh.
 Instead, the script stores the previous `/proc/stat` counters and calculates
