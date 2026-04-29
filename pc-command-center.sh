@@ -84,8 +84,8 @@ do
     echo
     echo "=================================================="
     echo "Press CTRL + C to exit"
-    echo "Refreshes every 60 seconds"
+    echo "Refreshes every 5 seconds"
     echo "=================================================="
 
-    sleep 60
+    sleep 5
 done

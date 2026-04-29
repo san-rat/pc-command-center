@@ -4,16 +4,24 @@
 # Environment files
 .env
 .env.*
+!.env.example
 
 # Logs and runtime output
 *.log
+*.out
+*.err
 logs/
 
 # Temporary files
 *.tmp
 *.temp
+*.bak
 tmp/
 temp/
+
+# Shell/script generated files
+*.pid
+*.lock
 
 # Editor and IDE files
 .vscode/
@@ -25,3 +33,9 @@ temp/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Archives and packaged output
+*.tar
+*.tar.gz
+*.tgz
+*.zip
