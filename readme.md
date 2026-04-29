@@ -3,21 +3,24 @@
 PC Command Center is a lightweight Bash terminal dashboard for monitoring the
 basic status of an Ubuntu/Linux machine.
 
-The script clears and redraws one terminal view with system, network, and
-process information, making it useful for a quick local health check without
-installing a full monitoring stack.
+The dashboard runs as a small terminal TUI. It uses cursor positioning to update
+in place instead of clearing and repainting the whole screen on every refresh,
+so the display feels steadier while still staying dependency-light.
 
 ## Features
 
+- Balanced terminal panels for system usage, network status, and top processes
 - Current user, hostname, date/time, and uptime
-- CPU usage calculated from `/proc/stat`
+- CPU usage calculated from `/proc/stat` deltas between refresh ticks
 - RAM usage from `free`
 - Root disk usage from `df`
 - CPU/system temperature when available
 - Active IPv4 network interfaces
 - Default gateway
 - Top processes sorted by CPU usage
-- Automatic refresh every 5 seconds
+- Status colors for healthy, warning, and high-usage values
+- Keyboard controls for quitting, refreshing, and changing refresh speed
+- Optional one-shot output mode for quick checks or scripts
 
 ## Requirements
 
@@ -27,7 +30,6 @@ tools that are usually available by default:
 - `bash`
 - `awk`
 - `cat`
-- `clear`
 - `date`
 - `df`
 - `free`
@@ -36,7 +38,9 @@ tools that are usually available by default:
 - `hostname`
 - `ip`
 - `ps`
-- `sleep`
+- `sed`
+- `stty`
+- `tput`
 - `uptime`
 - `whoami`
 
@@ -68,18 +72,45 @@ Run the dashboard from the project directory:
 ./pc-command-center.sh
 ```
 
-Press `Ctrl + C` to exit.
+The default refresh interval is 5 seconds.
+
+### Options
+
+```bash
+./pc-command-center.sh --interval 3
+./pc-command-center.sh --no-color
+./pc-command-center.sh --once
+./pc-command-center.sh --help
+```
+
+- `--interval SECONDS` sets the live refresh interval. The minimum is 1 second.
+- `--no-color` disables terminal colors.
+- `--once` prints one dashboard snapshot and exits.
+- `--help` shows usage information.
+
+### Live Controls
+
+- `q` quits and restores the terminal state.
+- `r` refreshes immediately.
+- `+` makes the dashboard refresh faster, down to 1 second.
+- `-` makes the dashboard refresh slower.
 
 ## Refresh Behavior
 
-The dashboard refreshes every 5 seconds. CPU usage sampling waits for 1 second
-inside each refresh cycle so the displayed percentage is based on a short live
-measurement rather than a single instant.
+The live dashboard enters the terminal alternate screen, hides the cursor, and
+redraws from the top-left position with `tput`. It restores the terminal when
+the app exits.
+
+CPU usage no longer waits for a blocking 1-second sample inside each refresh.
+Instead, the script stores the previous `/proc/stat` counters and calculates
+usage from the difference between dashboard refreshes.
 
 ## Notes
 
 - Temperature support depends on the hardware and available Linux sensors.
 - If no temperature source is detected, the dashboard shows `Not available`.
-- Network output lists up to 3 active IPv4 interfaces.
+- Network output lists up to 4 active IPv4 interfaces.
+- When stdout or stdin is not interactive, the script falls back to one-shot
+  output.
 - The script is intended for interactive terminal use, not background service
   monitoring.
