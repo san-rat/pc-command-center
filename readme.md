@@ -3,13 +3,13 @@
 PC Command Center is a lightweight Bash terminal dashboard for monitoring the
 basic status of an Ubuntu/Linux machine.
 
-The dashboard runs as a small terminal TUI. It uses cursor positioning to update
-in place instead of clearing and repainting the whole screen on every refresh,
-so the display feels steadier while still staying dependency-light.
+The dashboard runs as a compact terminal TUI. It is optimized for small
+quarter-screen terminal windows and uses cursor positioning to update in place
+instead of clearing and repainting the whole screen on every refresh.
 
 ## Features
 
-- Balanced terminal panels for system usage, network status, and top processes
+- Compact terminal view for system usage, network status, and top processes
 - Current user, hostname, date/time, and uptime
 - CPU usage calculated from `/proc/stat` deltas between refresh ticks
 - RAM usage from `free`
@@ -21,6 +21,7 @@ so the display feels steadier while still staying dependency-light.
 - Status colors for healthy, warning, and high-usage values
 - Keyboard controls for quitting, refreshing, and changing refresh speed
 - Optional one-shot output mode for quick checks or scripts
+- Optional wide layout for larger terminal windows
 
 ## Requirements
 
@@ -80,12 +81,14 @@ The default refresh interval is 5 seconds.
 ./pc-command-center.sh --interval 3
 ./pc-command-center.sh --no-color
 ./pc-command-center.sh --once
+./pc-command-center.sh --wide
 ./pc-command-center.sh --help
 ```
 
 - `--interval SECONDS` sets the live refresh interval. The minimum is 1 second.
 - `--no-color` disables terminal colors.
 - `--once` prints one dashboard snapshot and exits.
+- `--wide` uses the roomier panel layout for larger terminal windows.
 - `--help` shows usage information.
 
 ### Live Controls
@@ -100,6 +103,11 @@ The default refresh interval is 5 seconds.
 The live dashboard enters the terminal alternate screen, hides the cursor, and
 redraws from the top-left position with `tput`. It restores the terminal when
 the app exits.
+
+By default, the dashboard caps its rendered width at 88 columns so it fits well
+in a 1/4-screen terminal on a 1920x1080 display. The compact layout adapts to
+shorter terminal heights by showing fewer process rows and collapsing network
+details onto one line. Use `--wide` when you want the larger panel layout.
 
 CPU usage no longer waits for a blocking 1-second sample inside each refresh.
 Instead, the script stores the previous `/proc/stat` counters and calculates
