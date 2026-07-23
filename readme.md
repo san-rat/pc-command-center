@@ -92,9 +92,9 @@ The default refresh interval is 5 seconds.
 ./pc-command-center.sh --help
 ```
 
-- `--interval SECONDS` sets the live refresh interval. The minimum is 1 second.
+- `--interval SECONDS` sets the live refresh interval (1-999999 seconds).
 - `--no-color` disables terminal colors.
-- `--once` prints one dashboard snapshot and exits.
+- `--once` prints one dashboard snapshot and exits; it takes ~0.25s so CPU% can be measured over a short sampling window.
 - `--wide` uses the roomier panel layout for larger terminal windows.
 - `--help` shows usage information.
 

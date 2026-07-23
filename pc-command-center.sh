@@ -12,6 +12,9 @@ TERMINAL_READY=0
 STTY_STATE=""
 PREV_CPU_IDLE=0
 PREV_CPU_TOTAL=0
+CPU_IDLE=0
+CPU_TOTAL=0
+NEXT_DRAW=0
 
 RESET=""
 BOLD=""
@@ -31,7 +34,7 @@ Usage:
   ./pc-command-center.sh [options]
 
 Options:
-  --interval SECONDS  Set the refresh interval. Default: 5
+  --interval SECONDS  Set the refresh interval (1-999999). Default: 5
   --no-color          Disable terminal colors
   --once              Print one dashboard snapshot and exit
   --wide              Use the roomier wide dashboard layout
@@ -56,7 +59,7 @@ parse_args() {
         case "$1" in
             --interval)
                 [ "$#" -ge 2 ] || die "--interval requires a value"
-                [[ "$2" =~ ^[0-9]+$ ]] || die "--interval must be a positive integer"
+                [[ "$2" =~ ^[0-9]{1,6}$ ]] || die "--interval must be a positive integer (1-999999)"
                 [ "$2" -ge 1 ] || die "--interval must be at least 1"
                 REFRESH_INTERVAL="$2"
                 shift 2
@@ -316,7 +319,7 @@ get_temperature() {
     local temp
 
     if command -v sensors >/dev/null 2>&1; then
-        value=$(sensors | awk '/Package id 0|Core 0|temp1/ {print $2; exit}')
+        value=$(sensors 2>/dev/null | grep -E -m1 'Package id 0|Core 0|temp1' | grep -Eo -m1 '[+-]?[0-9]+(\.[0-9]+)?°?C')
         if [ -n "$value" ]; then
             printf '%s' "$value"
             return
@@ -485,11 +488,17 @@ process_panel() {
             head -n "$limit" |
             awk -v nw="$name_width" '
                 {
+                    pid = $1
+                    cpu = $(NF - 1)
+                    mem = $NF
                     name = $2
+                    for (i = 3; i <= NF - 2; i++) {
+                        name = name " " $i
+                    }
                     if (length(name) > nw) {
                         name = substr(name, 1, nw - 1) "~"
                     }
-                    printf "%5s  %-*s %6s %6s\n", $1, nw, name, $3 "%", $4 "%"
+                    printf "%5s  %-*s %6s %6s\n", pid, nw, name, cpu "%", mem "%"
                 }
             '
     )
@@ -651,11 +660,17 @@ compact_process_rows() {
             head -n "$limit" |
             awk -v nw="$name_width" '
                 {
+                    pid = $1
+                    cpu = $(NF - 1)
+                    mem = $NF
                     name = $2
+                    for (i = 3; i <= NF - 2; i++) {
+                        name = name " " $i
+                    }
                     if (length(name) > nw) {
                         name = substr(name, 1, nw - 1) "~"
                     }
-                    printf "%5s  %-*s %5s %5s\n", $1, nw, name, $3 "%", $4 "%"
+                    printf "%5s  %-*s %5s %5s\n", pid, nw, name, cpu "%", mem "%"
                 }
             '
     )
@@ -671,10 +686,14 @@ top_process_summary() {
         awk -v nw="$name_width" '
             {
                 name = $1
+                cpu = $NF
+                for (i = 2; i <= NF - 1; i++) {
+                    name = name " " $i
+                }
                 if (length(name) > nw) {
                     name = substr(name, 1, nw - 1) "~"
                 }
-                printf "%s %s%%", name, $2
+                printf "%s %s%%", name, cpu
             }
         '
 }
@@ -906,10 +925,6 @@ render_wide_dashboard() {
         process_limit=5
     fi
 
-    if [ "$LIVE_MODE" -eq 1 ]; then
-        tput_cmd cup 0 0
-    fi
-
     render_header "$width"
 
     if [ "$width" -ge 96 ]; then
@@ -986,19 +1001,19 @@ handle_key() {
             ;;
         r|R)
             render_dashboard
-            NEXT_DRAW=$(date +%s)
+            NEXT_DRAW=$(($(date +%s) + REFRESH_INTERVAL))
             ;;
         +|=)
             if [ "$REFRESH_INTERVAL" -gt 1 ]; then
                 REFRESH_INTERVAL=$((REFRESH_INTERVAL - 1))
             fi
             render_dashboard
-            NEXT_DRAW=$(date +%s)
+            NEXT_DRAW=$(($(date +%s) + REFRESH_INTERVAL))
             ;;
         -|_)
             REFRESH_INTERVAL=$((REFRESH_INTERVAL + 1))
             render_dashboard
-            NEXT_DRAW=$(date +%s)
+            NEXT_DRAW=$(($(date +%s) + REFRESH_INTERVAL))
             ;;
     esac
 }
@@ -1012,7 +1027,6 @@ run_live() {
     local last_lines
 
     if [ ! -t 0 ] || [ ! -t 1 ]; then
-        ONCE=1
         render_dashboard
         return
     fi
@@ -1057,6 +1071,7 @@ main() {
     parse_args "$@"
     setup_colors
     init_cpu_sample
+    sleep 0.25
 
     if [ "$ONCE" -eq 1 ]; then
         render_dashboard
