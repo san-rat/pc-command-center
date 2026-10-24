@@ -90,6 +90,7 @@ The default refresh interval is 5 seconds.
 ./pc-command-center.sh --once
 ./pc-command-center.sh --wide
 ./pc-command-center.sh --help
+./pc-command-center.sh --version
 ```
 
 - `--interval SECONDS` sets the live refresh interval (1-999999 seconds).
@@ -97,6 +98,7 @@ The default refresh interval is 5 seconds.
 - `--once` prints one dashboard snapshot and exits; it takes ~0.25s so CPU% can be measured over a short sampling window.
 - `--wide` uses the roomier panel layout for larger terminal windows.
 - `--help` shows usage information.
+- `--version` prints the current version and exits.
 
 ### Live Controls
 
@@ -141,3 +143,36 @@ usage from the difference between dashboard refreshes.
   output.
 - The script is intended for interactive terminal use, not background service
   monitoring.
+
+## Development and project direction
+
+The current version is **1.2.0**. Runtime requirements are unchanged; Bats and
+ShellCheck are development tools only. On Ubuntu, install them and run:
+
+```bash
+sudo apt install bats shellcheck
+bash -n pc-command-center.sh
+shellcheck pc-command-center.sh
+bats tests
+```
+
+GitHub Actions runs these syntax, lint, and regression checks on pushes and pull
+requests. The tests cover formatting, CPU delta math, temperature/process parsing,
+CLI validation, layout routing boundaries, and snapshots of all five layouts.
+Snapshot tests check layout properties rather than changing live metric values.
+The script can also be sourced to test functions without launching the dashboard.
+
+Project documentation is kept in Git:
+
+- [Project overview](doc/PROJECT.md): architecture and design constraints.
+- [Roadmap](doc/ROADMAP.md): completed stages, future specs, and acceptance criteria.
+- [Known gaps](doc/GAPS.md): original audit with current resolution status.
+- [Work log](doc/WORKLOG.md): implementation decisions and verification results.
+- [Changelog](CHANGELOG.md): user-facing release history.
+
+The next planned stage is **v1.3**: collect metrics once per frame and reduce idle
+subprocess overhead, with the v1.2 tests guarding existing behavior.
+
+## License
+
+[MIT](LICENSE). Copyright (c) 2026 san-rat.

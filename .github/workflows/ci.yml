@@ -1,0 +1,20 @@
+name: Checks
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install development tools
+        run: sudo apt-get update && sudo apt-get install -y bats shellcheck
+      - name: Check syntax and lint
+        run: |
+          bash -n pc-command-center.sh
+          shellcheck pc-command-center.sh
+      - name: Run regression tests
+        run: bats tests

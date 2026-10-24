@@ -3,6 +3,7 @@
 # PC Command Center
 # A lightweight terminal dashboard for Ubuntu/Linux systems.
 
+VERSION="1.2.0"
 REFRESH_INTERVAL=5
 ENABLE_COLOR=1
 ONCE=0
@@ -24,7 +25,6 @@ GREEN=""
 YELLOW=""
 BLUE=""
 CYAN=""
-MAGENTA=""
 
 usage() {
     cat <<'EOF'
@@ -38,6 +38,7 @@ Options:
   --no-color          Disable terminal colors
   --once              Print one dashboard snapshot and exit
   --wide              Use the roomier wide dashboard layout
+  --version           Show the version and exit
   --help              Show this help message
 
 Live controls:
@@ -76,6 +77,10 @@ parse_args() {
                 WIDE_MODE=1
                 shift
                 ;;
+            --version)
+                printf 'PC Command Center %s\n' "$VERSION"
+                exit 0
+                ;;
             --help|-h)
                 usage
                 exit 0
@@ -109,14 +114,15 @@ setup_colors() {
         GREEN=$(tput_cmd setaf 2)
         YELLOW=$(tput_cmd setaf 3)
         BLUE=$(tput_cmd setaf 4)
-        MAGENTA=$(tput_cmd setaf 5)
         CYAN=$(tput_cmd setaf 6)
     fi
 }
 
 cleanup() {
     if [ "$TERMINAL_READY" -eq 1 ]; then
-        [ -n "$STTY_STATE" ] && stty "$STTY_STATE" 2>/dev/null || true
+        if [ -n "$STTY_STATE" ]; then
+            stty "$STTY_STATE" 2>/dev/null || true
+        fi
         tput_cmd cnorm
         tput_cmd rmcup
     fi
@@ -239,9 +245,9 @@ bar() {
 }
 
 read_cpu_times() {
-    local cpu user nice system idle iowait irq softirq steal guest guest_nice
+    local user nice system idle iowait irq softirq steal
 
-    read -r cpu user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat
+    read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat
     CPU_IDLE=$((idle + iowait))
     CPU_TOTAL=$((user + nice + system + idle + iowait + irq + softirq + steal))
 }
@@ -623,7 +629,7 @@ compact_health_rows() {
 
 compact_network_rows() {
     local width="$1"
-    local rows="$2"
+    local row_limit="$2"
     local interface
     local gateway
 
@@ -633,7 +639,7 @@ compact_network_rows() {
     interface=${interface:-No active IPv4}
     gateway=${gateway:-N/A}
 
-    if [ "$rows" -le 1 ]; then
+    if [ "$row_limit" -le 1 ]; then
         print_fit_line "$width" "${BLUE}NET${RESET} $interface | GW $gateway"
     else
         print_fit_line "$width" "${BLUE}NET${RESET} $interface"
@@ -1080,4 +1086,6 @@ main() {
     fi
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
