@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.0.0 — 2026-10-24
+
+- Add bounded session history, sustained warnings, recovery hysteresis, and recent events.
+- Separate metric sampling from terminal repainting and mark missing or warming data explicitly.
+- Add focused process, storage, network, and pressure views with keyboard navigation.
+- Add literal process filtering, stable PID/start-time selection, and read-only process details.
+- Add multiple filesystem capacity/inode selections, explicit block-device I/O rates, and optional Linux pressure data.
+- Add versioned JSON/CSV snapshots and opt-in, bounded CSV recording to a new private file.
+- Preserve the Bash runtime, compact overview, and existing installation/package format.
+
 ## 3.0.0 — 2026-10-24
 
 - Add source install and uninstall targets for `pcc` and a committed manual page.

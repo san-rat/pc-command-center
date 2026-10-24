@@ -1,4 +1,4 @@
-.TH PCC 1 "October 2026" "PC Command Center 3.0.0" "User Commands"
+.TH PCC 1 "October 2026" "PC Command Center 4.0.0" "User Commands"
 .SH NAME
 pcc \- lightweight terminal dashboard for Linux system status
 .SH SYNOPSIS
@@ -40,6 +40,23 @@ Alias for
 Monitor the filesystem containing an existing directory. The default is
 .BR / .
 .TP
+.BI \-\-watch-disk " PATH"
+Add an extra filesystem selection to Storage. Repeat up to eight times. The first
+command-line selection replaces configured WATCH_DISK entries; --disk is unchanged.
+.TP
+.BI \-\-device " NAME"
+Select a kernel block device for read/write throughput, separately from capacity.
+.TP
+.BI \-\-view " VIEW"
+Select overview, processes, storage, network, or pressure at startup.
+.TP
+.BI \-\-format " FORMAT"
+Select terminal (default), json, or csv. JSON and CSV imply one-shot output.
+.TP
+.BI \-\-record " PATH"
+Record completed live samples in a new private CSV file, limited to 100 MiB.
+Requires interactive stdin/stdout and cannot be combined with one-shot output.
+.TP
 .B \-\-version
 Print the version and exit.
 .TP
@@ -71,6 +88,68 @@ Show help. Press any key to dismiss it.
 .TP
 .B n
 Cycle through active network interfaces when more than one is available.
+.TP
+.B 1, 2, 3, 4, 5
+Select Overview, Processes, Storage, Network, or Pressure.
+.TP
+.B e
+Toggle the bounded recent-event list.
+.TP
+.B j, k
+Move process selection or scroll storage/events.
+.TP
+.B /
+Edit a literal, case-insensitive process name/PID filter (maximum 128 characters).
+Enter applies, Escape cancels, and backspace edits. q is literal while editing.
+.TP
+.B Enter, Escape
+Open selected process details or return to the process list.
+.TP
+.B a
+Toggle full command arguments in process details. The next sample reads arguments;
+r requests a sample immediately. Arguments are off by default.
+.SH SAMPLING AND HISTORY
+Resize, sorting, scrolling, view changes, and help dismissal repaint the last
+sample without collecting another. History stores at most HISTORY_SAMPLES values
+per series in session memory. Wide Overview and Network display ASCII histories;
+smaller overview layouts retain numeric summaries. Each point is one sample, not a
+fixed time bucket. The caption gives the actual elapsed span.
+.PP
+CPU/RAM use 0-100 percent scales. RX/TX share the displayed network peak.
+The intensity alphabet is ._:-=+*#%@. A question mark denotes missing/warming data
+and a vertical bar marks a sampling gap. A measured zero remains distinct.
+.PP
+Pause/help suspend automatic collection. Manual refresh remains available while
+paused. Resume and long gaps reset rate baselines. Elapsed time uses /proc/uptime;
+wall-clock timestamps are UTC. The first affected rate may be unavailable.
+.SH WARNINGS
+Threshold conditions must be observed for ALERT_TRIGGER_SECONDS before becoming
+active. Recovery uses ALERT_RECOVERY_SECONDS and a lower recovery boundary.
+The defaults are 30 seconds, 15 seconds, and a margin of five percentage points
+(or five degrees Celsius for temperature). Load uses percent of online CPU capacity.
+.PP
+A gap exceeding twice the scheduled interval resets pending confirmation. Missing
+data makes an active warning stale rather than reporting recovery. Repeated samples
+do not duplicate transition events. Small headings show [!] for active warnings
+and [REC!] for recording failures. One-shot output does not claim sustained history.
+.SH INVESTIGATION
+Process selection uses PID plus kernel start time and survives sorting without
+transferring to a reused PID. Live CPU can exceed 100 percent on multiple cores;
+one-shot AVG is the ps lifetime average. Details include user, state, elapsed age,
+RSS, threads, parent PID, CPU and memory. Control/non-ASCII display bytes become
+question marks. Processes cannot be modified or terminated through this interface.
+.PP
+Storage groups paths by filesystem device identity, including bind aliases. It
+shows capacity/free space and inode usage separately from explicit block-device
+throughput. Unavailable inode accounting shows N/A. Changed/unmounted selections
+remain unavailable until restart. Remote, FUSE, and autofs mounts are not probed.
+Local df is batched under a two-second timeout plus one-second termination grace.
+These synchronous probes can delay input while running. Device rates use 512-byte
+sectors and never sum overlapping disks, partitions, or mapped layers.
+.PP
+Pressure displays available CPU/memory/I/O stall percentages over 10, 60 and 300
+seconds. System-level CPU full is undefined and omitted. Missing data shows N/A;
+pressure does not require privileges and does not trigger automatic warnings.
 .SH CONFIGURATION
 The optional configuration file is
 .IR ~/.config/pc-command-center.conf .
@@ -89,6 +168,56 @@ Supported settings include
 .BR LAYOUT ,
 and warning/critical threshold pairs for CPU, RAM, disk, temperature, load, and
 swap. Threshold pairs are ignored when invalid.
+.PP
+Additional literal settings and defaults:
+.TP
+.B HISTORY_ENABLED=1, WARNINGS_ENABLED=1, PRESSURE_ENABLED=1
+Boolean 0 or 1; these features can be disabled independently.
+.TP
+.B HISTORY_SAMPLES=60
+Integer 10-600.
+.TP
+.B ALERT_TRIGGER_SECONDS=30, ALERT_RECOVERY_SECONDS=15
+Integer 1-3600 seconds each.
+.TP
+.B ALERT_PERCENT_MARGIN=5, ALERT_TEMP_MARGIN=5
+Integer 0-100 percentage points or 0-999 degrees Celsius respectively.
+.TP
+.B EVENT_CAPACITY=100
+Integer 10-1000 retained session events.
+.TP
+.B BLOCK_DEVICE=
+Explicit kernel device name; empty disables device throughput.
+.TP
+.B WATCH_DISK_1 through WATCH_DISK_8
+One existing directory per key; defaults are unset. Values are literal paths.
+.SH STRUCTURED OUTPUT
+Schema version 1 contains schema_version, app_version, session_id, sample_sequence,
+timestamp_utc, elapsed_ms, interval_ms, text_encoding, disk_path, interface, and
+numeric metrics. cpu, ram, swap and disk are integer percentages; memory_used_bytes,
+memory_total_bytes, swap_used_bytes, swap_total_bytes, disk_used_bytes and
+disk_available_bytes are byte counts; rx/tx are bytes per second; temp is Celsius.
+.PP
+Each metric has a companion field named metric_state: valid, warming, unavailable,
+or unsupported. Missing numeric values are JSON null or empty CSV fields. Text
+uses reversible percent-bytes encoding: unsafe/non-ASCII bytes become %HH, including
+percent signs, CSV/JSON delimiters, and leading spreadsheet formula characters.
+Decode escapes as bytes before UTF-8 interpretation. Hostnames, user identity,
+process arguments, multi-filesystem tables, and events are excluded from schema 1.
+.SH RECORDING
+Recording creates a new regular file with mode 0600. Existing files, symlinks,
+directories and FIFOs are never replaced. The parent must exist and support hard
+links: a private temporary inode is atomically linked to the chosen destination.
+There is no append or overwrite mode. One completed sample writes one row;
+repaints write none and pauses leave timestamp gaps.
+.PP
+Recording stops at 100 MiB or a write failure, leaves monitoring running, displays
+a persistent error, and sets the eventual exit status to 1. Failure to start exits
+before terminal setup. Descriptors close on quit/SIGINT/SIGTERM; durability after
+power loss and a final row after SIGKILL are not guaranteed.
+.SH EXIT STATUS
+Zero on normal completion; one for argument errors, failed recording startup, or
+recording failure/size limit during the session.
 .SH EXAMPLES
 .TP
 Print a snapshot:

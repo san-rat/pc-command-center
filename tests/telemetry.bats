@@ -1,7 +1,10 @@
 #!/usr/bin/env bats
 
+source "$BATS_TEST_DIRNAME/../pc-command-center.sh"
+source "$BATS_TEST_DIRNAME/test_helper.bash"
+
 setup() {
-    source "$BATS_TEST_DIRNAME/../pc-command-center.sh"
+    init_test_arrays
     CPU_COUNT=4
     LIVE_MODE=1
     CALLS="$BATS_TEST_TMPDIR/calls"
@@ -31,12 +34,14 @@ setup() {
         echo "$1 $TEST_RX $TEST_TX" >> "$CALLS"
         printf '%s %s\n' "$TEST_RX" "$TEST_TX"
     }
+    SAMPLE_TIME_MS=2000
     collect_network_metrics
     [ "$METRIC_NET_INTERFACE $METRIC_NET_RX_RATE $METRIC_NET_TX_RATE" = 'eth0 N/A N/A' ]
 
     TEST_RX=3048 TEST_TX=4024
     PREV_NET_INTERFACE=eth0 PREV_NET_RX=1000 PREV_NET_TX=3000
-    PREV_NET_TIME=$(( ${EPOCHSECONDS:-$SECONDS} - 2 ))
+    PREV_NET_TIME=2000
+    SAMPLE_TIME_MS=4000
     collect_network_metrics
 
     [ "$METRIC_NET_RX_RATE $METRIC_NET_TX_RATE" = '1.0KiB/s 512B/s' ]
@@ -46,13 +51,14 @@ setup() {
 @test "live process ranking uses CPU deltas, keeps spaced names, and excludes self" {
     CPU_DIFF_TOTAL=100
     PREV_PROC_TICKS=([1234]=100 [2345]=200)
+    PREV_PROC_START=([1234]=1 [2345]=2)
     read_process_ticks() {
         echo read >> "$CALLS"
-        printf '1234 150\n2345 210\n'
+        printf '1234 150 1\n2345 210 2\n'
     }
     ps() {
         echo ps >> "$CALLS"
-        printf '%s\n' '1234 Isolated Web Co 12.3 4.5' '2345 worker 1.2 0.3' "$$ self 99.0 1.0"
+        printf '%s\n' '1234 user S 1 100 1 1 12.3 4.5 Isolated Web Co' '2345 user S 1 100 1 1 1.2 0.3 worker' "$$ user S 1 100 1 1 99.0 1.0 self"
     }
 
     collect_live_processes

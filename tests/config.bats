@@ -1,6 +1,10 @@
 #!/usr/bin/env bats
 
+source "$BATS_TEST_DIRNAME/../pc-command-center.sh"
+source "$BATS_TEST_DIRNAME/test_helper.bash"
+
 setup() {
+    init_test_arrays
     SCRIPT="$BATS_TEST_DIRNAME/../pc-command-center.sh"
     export XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/config"
     mkdir -p "$XDG_CONFIG_HOME"
@@ -124,6 +128,7 @@ CONFIG
     local disk="$BATS_TEST_TMPDIR/cli disk"
     mkdir "$disk"
     printf 'REFRESH_INTERVAL=9\nENABLE_COLOR=1\nLAYOUT=wide\nDISK_PATH=/tmp\nCPU_WARN=70\n' > "$CONFIG"
+    collect_sample() { :; }
     setup_colors() { :; }
     init_cpu_sample() { :; }
     sleep() { :; }
@@ -195,4 +200,39 @@ CONFIG
     for key in REFRESH_INTERVAL ENABLE_COLOR DISK_PATH NETWORK_INTERFACE LAYOUT CPU_WARN CPU_CRIT RAM_WARN RAM_CRIT DISK_WARN DISK_CRIT TEMP_WARN TEMP_CRIT LOAD_WARN LOAD_CRIT SWAP_WARN SWAP_CRIT --layout --disk; do
         [[ "$output" == *"$key"* ]]
     done
+}
+
+@test "post-v3 settings validate ranges and CLI extra disks replace config selections" {
+    printf '%s\n' 'HISTORY_ENABLED=0' 'HISTORY_SAMPLES=010' 'WARNINGS_ENABLED=0' \
+        'ALERT_TRIGGER_SECONDS=001' 'ALERT_RECOVERY_SECONDS=3600' 'ALERT_PERCENT_MARGIN=0' \
+        'ALERT_TEMP_MARGIN=999' 'EVENT_CAPACITY=1000' 'PRESSURE_ENABLED=0' \
+        'BLOCK_DEVICE=nvme0n1' 'WATCH_DISK_1=/tmp' > "$CONFIG"
+    read_config
+    [ "$HISTORY_ENABLED $HISTORY_SAMPLES $WARNINGS_ENABLED $ALERT_TRIGGER_SECONDS" = '0 10 0 1' ]
+    [ "$ALERT_RECOVERY_SECONDS $ALERT_PERCENT_MARGIN $ALERT_TEMP_MARGIN $EVENT_CAPACITY" = '3600 0 999 1000' ]
+    [ "$PRESSURE_ENABLED $BLOCK_DEVICE ${WATCH_DISKS[*]}" = '0 nvme0n1 /tmp' ]
+    parse_args --watch-disk / --watch-disk /tmp --view pressure --format json
+    [ "${WATCH_DISKS[*]}" = '/ /tmp' ]
+    [ "$VIEW $OUTPUT_FORMAT" = 'pressure json' ]
+    ! valid_setting HISTORY_SAMPLES 9
+    ! valid_setting HISTORY_SAMPLES 601
+    ! valid_setting EVENT_CAPACITY 1001
+    ! valid_setting ALERT_TRIGGER_SECONDS 0
+    ! valid_setting BLOCK_DEVICE '../../bad'
+    ! valid_setting WATCH_DISK_9 /tmp
+}
+
+@test "all added options reject missing and invalid values" {
+    local flag
+    for flag in --watch-disk --device --view --format --record; do
+        run bash "$SCRIPT" "$flag"
+        [ "$status" -eq 1 ]
+        [[ "$output" == *'requires a'* ]]
+    done
+    run bash "$SCRIPT" --format invalid
+    [ "$status" -eq 1 ]
+    run bash "$SCRIPT" --view invalid
+    [ "$status" -eq 1 ]
+    run bash "$SCRIPT" --device '../../bad'
+    [ "$status" -eq 1 ]
 }

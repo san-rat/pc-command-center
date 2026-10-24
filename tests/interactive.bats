@@ -1,10 +1,14 @@
 #!/usr/bin/env bats
 
+source "$BATS_TEST_DIRNAME/../pc-command-center.sh"
+source "$BATS_TEST_DIRNAME/test_helper.bash"
+
 setup() {
-    source "$BATS_TEST_DIRNAME/../pc-command-center.sh"
+    init_test_arrays
     CALLS="$BATS_TEST_TMPDIR/calls"
     : > "$CALLS"
     LIVE_MODE=0
+    collect_sample() { :; }
     render_dashboard() { echo dashboard >> "$CALLS"; }
     render_help_overlay() { echo help >> "$CALLS"; }
 }
@@ -22,8 +26,10 @@ setup() {
     CPU_COUNT=4
     CPU_DIFF_TOTAL=100
     PREV_PROC_TICKS=([1234]=100 [2345]=100)
-    read_process_ticks() { printf '1234 150\n2345 110\n'; }
-    ps() { printf '%s\n' '1234 busy 90.0 1.0' '2345 cache 1.0 9.0'; }
+    PREV_PROC_START=([1234]=1 [2345]=2)
+    LIVE_MODE=1
+    read_process_ticks() { printf '1234 150 1\n2345 110 2\n'; }
+    ps() { printf '%s\n' '1234 user S 1 100 1 1 90.0 1.0 busy' '2345 user S 1 100 1 1 1.0 9.0 cache'; }
 
     collect_live_processes
 

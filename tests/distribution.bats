@@ -1,8 +1,12 @@
 #!/usr/bin/env bats
 
+source "$BATS_TEST_DIRNAME/../pc-command-center.sh"
+source "$BATS_TEST_DIRNAME/test_helper.bash"
+
 setup() {
+    init_test_arrays
     ROOT="$BATS_TEST_DIRNAME/.."
-    VERSION=3.0.0
+    source "$ROOT/pc-command-center.sh"
 }
 
 @test "source install places pcc and its man page under the chosen prefix and uninstalls cleanly" {
@@ -42,7 +46,7 @@ setup() {
 @test "release notes select only the matching changelog section" {
     run "$ROOT/packaging/release-notes.sh" "$VERSION"
     [ "$status" -eq 0 ]
-    [[ "$output" == *'source install and uninstall'* ]]
+    [[ "$output" == *'session history'* ]]
     [[ "$output" != *'Add live CPU/memory process sorting'* ]]
     run "$ROOT/packaging/release-notes.sh" 9.9.9
     [ "$status" -ne 0 ]

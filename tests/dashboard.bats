@@ -1,6 +1,10 @@
 #!/usr/bin/env bats
 
+source "$BATS_TEST_DIRNAME/../pc-command-center.sh"
+source "$BATS_TEST_DIRNAME/test_helper.bash"
+
 setup() {
+    init_test_arrays
     SCRIPT="$BATS_TEST_DIRNAME/../pc-command-center.sh"
     export XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/config"
     source "$SCRIPT"
