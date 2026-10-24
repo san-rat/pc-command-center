@@ -11,7 +11,7 @@ instead of clearing and repainting the whole screen on every refresh.
 
 - Compact terminal view for system usage, health, network status, and top processes
 - Current user, hostname, date/time, and uptime
-- CPU usage calculated from `/proc/stat` deltas between refresh ticks
+- Total and per-core CPU usage calculated from `/proc/stat` deltas (per-core bars in wide view)
 - RAM usage from `free`
 - Selected filesystem usage from `df` (root by default)
 - Load average from `/proc/loadavg`
@@ -19,9 +19,10 @@ instead of clearing and repainting the whole screen on every refresh.
 - Swap usage from `free`
 - Selected filesystem free space from `df`
 - CPU/system temperature when available
-- Active IPv4 network interfaces
+- Active IPv4 network interfaces and RX/TX throughput from `/proc/net/dev` counter deltas
 - Default gateway
-- Top processes sorted by CPU usage
+- Live top processes sorted by interval CPU usage; one-shot snapshots label `ps` lifetime averages as AVG
+- Battery charge and charging state when a battery is present (wide view)
 - Status colors for healthy, warning, and high-usage values
 - Responsive compact, mini, micro, and tiny views for smaller terminals
 - Keyboard controls for quitting, refreshing, and changing refresh speed
@@ -32,7 +33,7 @@ instead of clearing and repainting the whole screen on every refresh.
 ## Requirements
 
 This project is designed for Ubuntu/Linux systems and uses common command-line
-tools that are usually available by default:
+tools that are usually available by default. Live telemetry reads `/proc/stat`, `/proc/net/dev`, `/proc/[pid]/stat`, and optional `/sys/class/power_supply` battery files:
 
 - `bash`
 - `awk`
@@ -46,6 +47,7 @@ tools that are usually available by default:
 - `hostname`
 - `ip`
 - `ps`
+- `sort`
 - `sed`
 - `stty`
 - `tput`

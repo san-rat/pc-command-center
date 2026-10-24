@@ -43,6 +43,14 @@ setup() {
     whoami() { echo whoami >> "$CALLS"; echo fixture-user; }
     date() { echo date >> "$CALLS"; echo '2026-10-24 12:34:56'; }
     getconf() { echo getconf >> "$CALLS"; echo 4; }
+    read_network_counters() {
+        echo network >> "$CALLS"
+        printf '%s %s\n' "${TEST_RX:-1000}" "${TEST_TX:-2000}"
+    }
+    read_battery_metrics() {
+        echo battery >> "$CALLS"
+        [ -n "${TEST_BATTERY:-}" ] && printf '%s' "$TEST_BATTERY"
+    }
 }
 
 @test "all layouts collect each source exactly once per frame" {
@@ -51,7 +59,7 @@ setup() {
         read -r COLUMNS LINES LAYOUT <<< "$spec"
         : > "$CALLS"
         render_dashboard > "$BATS_TEST_TMPDIR/frame"
-        for source in cpu free df ps ip temperature uptime hostname whoami date getconf; do
+        for source in cpu free df ps ip temperature uptime hostname whoami date getconf network battery; do
             [ "$(grep -cx "$source" "$CALLS")" -eq 1 ]
         done
     done

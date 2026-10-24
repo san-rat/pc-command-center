@@ -1,7 +1,7 @@
 # PC Command Center — contributor guide
 
 Single-file Bash TUI for Ubuntu/Linux. Runtime code is in
-`pc-command-center.sh`; current version is 1.4.0. No build system or new runtime
+`pc-command-center.sh`; current version is 2.0.0. No build system or new runtime
 dependencies. Project notes in `doc/` are local and ignored by Git.
 
 ## Commands
@@ -42,8 +42,10 @@ snapshots. Test tooling is optional for end users.
   mini 45x12, micro 36x8, otherwise tiny. `LAYOUT=auto` selects those tiers;
   `--layout` forces a tier and `--wide` aliases `--layout wide`.
 - First render waits 0.25s for a CPU sample. Call `get_cpu_usage` directly so
-  `PREV_CPU_*` advances in the parent shell. `ps` process CPU remains a lifetime
-  average; interval sampling is planned for v2.0.
+  `PREV_CPU_*` and per-core baselines advance in the parent shell. Live process CPU
+  uses `/proc/[pid]/stat` deltas; one-shot `ps` values are lifetime averages.
+- Network throughput uses counter deltas on the preferred/default-route interface;
+  battery data is optional and per-core bars render in wide mode.
 - Schedule with `${EPOCHSECONDS:-$SECONDS}`; never spawn `date` in the idle loop.
 - Live repaint uses `cup 0 0` + redraw + `ed`. Do not clear on every refresh.
 - Keep terminal setup paired with EXIT cleanup; intentional `tput`/`stty` error

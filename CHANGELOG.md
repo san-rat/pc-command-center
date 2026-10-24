@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.0 — 2026-10-24
+
+- Add RX/TX throughput for the preferred or default-route interface.
+- Rank live processes by CPU jiffy deltas and exclude the dashboard itself; one-shot snapshots label lifetime averages as AVG.
+- Show battery status when present and per-core CPU bars in the wide layout.
+- Degrade missing telemetry sources cleanly and extend the regression suite.
+
 ## 1.4.0 — 2026-10-24
 
 - Add an optional literal config file for refresh, colors, metric thresholds,
