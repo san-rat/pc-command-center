@@ -1,5 +1,25 @@
 # Work log
 
+## 2026-10-24 — Hosted CI portability fixes
+
+- Renamed the awk variable `load` to `load_one`: the Ubuntu 26.04 runner rejects
+  `load` as a gawk built-in name, while local mawk accepted it.
+- Changed the sourceability test to compare traps before and after sourcing,
+  rather than assuming the child starts with no ignored signals. It explicitly
+  seeds an ignored SIGINT and still checks that functions are defined and sourcing
+  emits no output.
+- Reproduced the original sourceability failure with Ubuntu 26.04/Bash 5.3.9,
+  upstream Bats 1.13.0, and inherited ignored SIGPIPE/SIGQUIT. The old test prints
+  those pre-existing traps and fails; the revised test passes in the same shell.
+  A temporary script that installs a WINCH trap is still rejected by the new check.
+- Enabled `bats --print-output-on-failure` in CI so failed assertions show their
+  captured output. No runtime dependencies or layout behavior changed.
+- Local syntax and ShellCheck checks passed; all 27 tests passed with Bats 1.13.0
+  and mawk. The Ubuntu container's package installation was slow; the source test
+  was verified using its base image with upstream Bats mounted read-only.
+  Hosted gawk and regression results are tracked on
+  [PR #2](https://github.com/san-rat/pc-command-center/pull/2).
+
 ## 2026-10-24 — v1.3 single-pass engine
 
 ### Changes

@@ -342,7 +342,7 @@ collect_metrics() {
     cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
     [[ "$cores" =~ ^[0-9]+$ ]] || cores=1
     [ "$cores" -lt 1 ] && cores=1
-    METRIC_LOAD_PERCENT=$(awk -v load="$METRIC_LOAD_ONE" -v cores="$cores" 'BEGIN {printf "%d", load * 100 / cores}')
+    METRIC_LOAD_PERCENT=$(awk -v load_one="$METRIC_LOAD_ONE" -v cores="$cores" 'BEGIN {printf "%d", load_one * 100 / cores}')
 
     METRIC_TEMP=$(get_temperature)
     METRIC_TEMP_PERCENT=$(temperature_number "$METRIC_TEMP")

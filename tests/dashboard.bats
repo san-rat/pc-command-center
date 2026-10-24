@@ -6,9 +6,16 @@ setup() {
 }
 
 @test "sourcing defines functions without running main or installing traps" {
-    run bash -c 'source "$1"; declare -F render_dashboard; trap -p' _ "$SCRIPT"
+    # A child shell can inherit ignored signals from the test runner.
+    run bash -c '
+        trap "" INT
+        before=$(trap -p)
+        source "$1" || exit
+        declare -F render_dashboard >/dev/null || exit
+        [ "$(trap -p)" = "$before" ]
+    ' _ "$SCRIPT"
     [ "$status" -eq 0 ]
-    [ "$output" = render_dashboard ]
+    [ -z "$output" ]
 }
 
 @test "pad_ansi pads, preserves exact fits, and truncates with a marker" {
