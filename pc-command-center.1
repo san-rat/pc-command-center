@@ -1,0 +1,121 @@
+.TH PCC 1 "October 2026" "PC Command Center 3.0.0" "User Commands"
+.SH NAME
+pcc \- lightweight terminal dashboard for Linux system status
+.SH SYNOPSIS
+.B pcc
+.RI [ options ]
+.SH DESCRIPTION
+.B pcc
+is a Bash terminal dashboard for CPU, memory, filesystem, network, process,
+temperature, and optional battery telemetry. It offers a live terminal display
+and a one-shot snapshot mode.
+.SH OPTIONS
+.TP
+.BI \-\-interval " SECONDS"
+Set the refresh interval from 1 to 999999 seconds. The default is 5 seconds.
+.TP
+.B \-\-no-color
+Disable terminal colors.
+.TP
+.B \-\-once
+Print one dashboard snapshot and exit. Process CPU values in this mode are
+lifetime averages reported by
+.BR ps .
+.TP
+.BI \-\-layout " LAYOUT"
+Force one of the
+.BR compact ,
+.BR mini ,
+.BR micro ,
+.B tiny,
+or
+.B wide
+layouts regardless of terminal dimensions.
+.TP
+.B \-\-wide
+Alias for
+.BR "--layout wide" .
+.TP
+.BI \-\-disk " PATH"
+Monitor the filesystem containing an existing directory. The default is
+.BR / .
+.TP
+.B \-\-version
+Print the version and exit.
+.TP
+.B \-\-help
+Print usage information and exit.
+.SH LIVE CONTROLS
+In live mode, use the following keys:
+.TP
+.B q
+Quit.
+.TP
+.B r
+Refresh immediately.
+.TP
+.B +
+Increase the refresh rate, down to a one-second interval.
+.TP
+.B -
+Decrease the refresh rate.
+.TP
+.B c, m
+Sort processes by CPU or memory usage.
+.TP
+.B p
+Pause or resume automatic refresh.
+.TP
+.B ?
+Show help. Press any key to dismiss it.
+.TP
+.B n
+Cycle through active network interfaces when more than one is available.
+.SH CONFIGURATION
+The optional configuration file is
+.IR ~/.config/pc-command-center.conf .
+If
+.B XDG_CONFIG_HOME
+is set, the file is read from that directory instead. Defaults are overridden
+by configuration values, then by command-line options. Entries use literal
+.BR KEY=value
+syntax; shell expansion and command substitution are not performed.
+.PP
+Supported settings include
+.BR REFRESH_INTERVAL ,
+.BR ENABLE_COLOR ,
+.BR DISK_PATH ,
+.BR NETWORK_INTERFACE ,
+.BR LAYOUT ,
+and warning/critical threshold pairs for CPU, RAM, disk, temperature, load, and
+swap. Threshold pairs are ignored when invalid.
+.SH EXAMPLES
+.TP
+Print a snapshot:
+.B pcc --once
+.TP
+Use a three-second refresh interval without colors:
+.B pcc --interval 3 --no-color
+.TP
+Show a wide layout:
+.B pcc --wide
+.TP
+Monitor the filesystem containing /home:
+.B pcc --disk /home
+.SH FILES
+.TP
+.I ~/.config/pc-command-center.conf
+Optional user configuration file.
+.SH DEPENDENCIES
+The Debian package declares Bash, coreutils, grep, hostname, iproute2, procps,
+sed, mawk or gawk, and ncurses-bin as dependencies. Temperature readings from
+.B sensors
+are optional and require
+.BR lm-sensors .
+.SH AUTHOR
+PC Command Center contributors.
+.SH SEE ALSO
+.BR bash (1),
+.BR free (1),
+.BR ip (8),
+.BR ps (1)

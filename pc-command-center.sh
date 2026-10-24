@@ -3,7 +3,7 @@
 # PC Command Center
 # A lightweight terminal dashboard for Ubuntu/Linux systems.
 
-VERSION="2.1.0"
+VERSION="3.0.0"
 REFRESH_INTERVAL=5
 ENABLE_COLOR=1
 ONCE=0

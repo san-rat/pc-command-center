@@ -1,8 +1,9 @@
 # PC Command Center — contributor guide
 
 Single-file Bash TUI for Ubuntu/Linux. Runtime code is in
-`pc-command-center.sh`; current version is 2.1.0. No build system or new runtime
-dependencies. Project notes in `doc/` are local and ignored by Git.
+`pc-command-center.sh`; current version is 3.0.0. The Makefile supports source
+installation, removal, manual generation, and Debian package creation. Project
+notes in `doc/` are local and ignored by Git.
 
 ## Commands
 
@@ -12,12 +13,14 @@ dependencies. Project notes in `doc/` are local and ignored by Git.
 - Syntax: `bash -n pc-command-center.sh`.
 - Lint: `shellcheck pc-command-center.sh`.
 - Tests: `bats tests`.
-- Development tools on Ubuntu: `sudo apt install bats shellcheck`.
+- Development tools on Ubuntu: `sudo apt install bats shellcheck make pandoc dpkg-dev`.
 - Headless layout: `TERM= COLUMNS=50 LINES=14 ./pc-command-center.sh --once`.
 - Wide alignment: `TERM= COLUMNS=110 LINES=30 ./pc-command-center.sh --once --wide | awk '{print length($0)}' | sort -u` (must print `110`).
 
-GitHub Actions runs syntax, ShellCheck, and Bats on push/PR. Tests source the
-script using its `BASH_SOURCE` entry guard. They include synthetic sensor/process
+GitHub Actions runs syntax, ShellCheck, Bats, and source/package install smoke
+checks on push/PR. Tagged releases build and smoke-test the Debian package before
+publishing it. Tests source the script using its `BASH_SOURCE` entry guard. They
+include synthetic sensor/process
 input, CPU deltas, formatting, CLI errors, tier boundaries, and real headless
 snapshots. Test tooling is optional for end users.
 
@@ -63,7 +66,7 @@ snapshots. Test tooling is optional for end users.
 
 - `doc/PROJECT.md`: architecture and rationale.
 - `doc/GAPS.md`: original audit plus current resolution status.
-- `doc/ROADMAP.md`: version specs; v1.4/v2.0 PRs and local v2.1 work.
+- `doc/ROADMAP.md`: version specs and project roadmap status.
 - `doc/WORKLOG.md`: dated implementation and verification record.
 - `CHANGELOG.md`: user-facing changes.
 

@@ -1,0 +1,58 @@
+name: Debian release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install checks and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats coreutils grep gawk hostname iproute2 man-db mawk ncurses-bin procps sed shellcheck
+      - name: Verify tag and run checks
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          script_version=$(sed -n 's/^VERSION="\([0-9][^"]*\)"/\1/p' pc-command-center.sh)
+          test "$version" = "$script_version"
+          bash -n pc-command-center.sh
+          shellcheck pc-command-center.sh packaging/*.sh
+          bats --print-output-on-failure tests
+      - name: Build Debian package
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: ./packaging/build-deb.sh "${RELEASE_TAG#v}" dist
+      - name: Install, run, document, and remove package
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          package=$(find dist -maxdepth 1 -name '*.deb' -print -quit)
+          test -n "$package"
+          sudo dpkg -i "$package"
+          test "$(pcc --version)" = "PC Command Center ${RELEASE_TAG#v}"
+          man -w pcc >/dev/null
+          TERM= COLUMNS=80 LINES=24 pcc --once --no-color >/tmp/pcc-release-smoke.txt
+          grep -q 'PC COMMAND CENTER' /tmp/pcc-release-smoke.txt
+          sudo dpkg -r pc-command-center
+          test ! -e /usr/bin/pcc
+          test ! -e /usr/share/man/man1/pcc.1
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          ./packaging/release-notes.sh "$version" > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$RELEASE_TAG" dist/*.deb \
+            --title "PC Command Center $version" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --verify-tag

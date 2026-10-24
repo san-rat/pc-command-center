@@ -60,11 +60,43 @@ Optional:
 
 ## Installation
 
-Clone or download the project, then make the script executable:
+### Install from source
+
+Clone the project and install it for your user:
 
 ```bash
-chmod +x pc-command-center.sh
+make install
+pcc --version
+man pcc
 ```
+
+By default, `make install` places `pcc` in `~/.local/bin` and its manual in
+`~/.local/share/man/man1`. Add `~/.local/bin` to `PATH` if it is not already
+there. To install system-wide, run `sudo make install PREFIX=/usr`. Remove a
+source installation with `make uninstall`, using the same `PREFIX` and `DESTDIR`
+values used during installation.
+
+### Install a Debian package
+
+Download the `.deb` attached to a project release and install it with:
+
+```bash
+sudo dpkg -i ./pc-command-center_VERSION_all.deb
+pcc --version
+man pcc
+```
+
+Remove the package with `sudo dpkg -r pc-command-center`.
+
+### Build from source
+
+The committed `pc-command-center.1` documents the command-line options and live
+controls. Regenerate it from this README with `make man` (requires `pandoc`).
+Build a Debian package with `make package` (requires `dpkg-deb`); the artifact is
+written to `dist/`.
+Maintainers publish a version by pushing a `vX.Y.Z` tag matching the script
+version. GitHub Actions runs the checks, builds and smoke-tests the `.deb`, then
+attaches it to a GitHub Release with notes from `CHANGELOG.md`.
 
 If you want temperature readings from `lm-sensors`, install and configure it:
 
