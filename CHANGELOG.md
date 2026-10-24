@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.0 — 2026-10-24
+
+- Add live CPU/memory process sorting, pause/resume, a dismissible help overlay, and network-interface cycling.
+- Show paused state and update controls in responsive layouts.
+- Keep keyboard input active while refresh is paused.
+
 ## 2.0.0 — 2026-10-24
 
 - Add RX/TX throughput for the preferred or default-route interface.

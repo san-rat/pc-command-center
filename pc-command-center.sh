@@ -3,13 +3,16 @@
 # PC Command Center
 # A lightweight terminal dashboard for Ubuntu/Linux systems.
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 REFRESH_INTERVAL=5
 ENABLE_COLOR=1
 ONCE=0
 LAYOUT=auto
 DISK_PATH=/
 NETWORK_INTERFACE=""
+PROCESS_SORT=cpu
+PAUSED=0
+HELP_VISIBLE=0
 CPU_WARN=60
 CPU_CRIT=85
 RAM_WARN=75
@@ -63,6 +66,7 @@ METRIC_PROCESSES=""
 METRIC_INTERFACE="No active IPv4"
 METRIC_GATEWAY=""
 METRIC_INTERFACES=()
+METRIC_ALL_INTERFACES=()
 METRIC_UPTIME=""
 METRIC_HOST=""
 METRIC_USER=""
@@ -126,6 +130,10 @@ Live controls:
   r     Refresh now
   +     Refresh faster, down to 1 second
   -     Refresh slower
+  c/m   Sort processes by CPU/memory
+  p     Pause or resume automatic refresh
+  ?     Show help; any key dismisses it
+  n     Cycle the active network interface
 EOF
 }
 
@@ -554,7 +562,7 @@ read_battery_metrics() {
 }
 
 collect_live_processes() {
-    local pid line previous delta percent mem name
+    local pid line previous delta percent mem name sort_value
     local -A current_ticks=() percentages=()
     local -a process_lines=()
     local sorted_processes
@@ -587,16 +595,18 @@ collect_live_processes() {
         name=${BASH_REMATCH[2]}
         mem=${BASH_REMATCH[4]}
         percent=${percentages[$pid]:-0.0}
-        process_lines+=("$percent $pid $name $mem")
+        sort_value=$percent
+        [ "$PROCESS_SORT" = mem ] && sort_value=$mem
+        process_lines+=("$sort_value $percent $pid $name $mem")
     done < <(ps -eo pid=,comm=,%cpu=,%mem= 2>/dev/null)
     sorted_processes=$(printf '%s\n' "${process_lines[@]}" | sort -k1,1nr)
     METRIC_PROCESSES=""
     while IFS= read -r line; do
-        [[ "$line" =~ ^([0-9]+\.[0-9]+)[[:space:]]+([0-9]+)[[:space:]]+(.*)[[:space:]]+([0-9.]+)$ ]] || continue
-        percent=${BASH_REMATCH[1]}
-        pid=${BASH_REMATCH[2]}
-        name=${BASH_REMATCH[3]}
-        mem=${BASH_REMATCH[4]}
+        [[ "$line" =~ ^([0-9]+\.[0-9]+)[[:space:]]+([0-9]+\.[0-9]+)[[:space:]]+([0-9]+)[[:space:]]+(.*)[[:space:]]+([0-9.]+)$ ]] || continue
+        percent=${BASH_REMATCH[2]}
+        pid=${BASH_REMATCH[3]}
+        name=${BASH_REMATCH[4]}
+        mem=${BASH_REMATCH[5]}
         METRIC_PROCESSES+="${METRIC_PROCESSES:+$'\n'}$pid $name $percent $mem"
     done <<< "$sorted_processes"
     METRIC_PROCESS_CPU_MODE=now
@@ -623,6 +633,7 @@ read_process_ticks() {
 collect_metrics() {
     local cores load_five load_fifteen line first second third fourth fifth
     local route_interface route_gateway
+    local normalized_interface
 
     # CPU counters must advance in the parent shell, not a command substitution.
     get_cpu_usage >/dev/null
@@ -679,6 +690,7 @@ collect_metrics() {
     done <<< "$METRIC_PROCESSES"
 
     METRIC_INTERFACES=()
+    METRIC_ALL_INTERFACES=()
     METRIC_INTERFACE="No active IPv4"
     METRIC_GATEWAY=""
     METRIC_DEFAULT_IFACE=""
@@ -694,10 +706,16 @@ collect_metrics() {
                 METRIC_GATEWAY=$route_gateway
                 METRIC_DEFAULT_IFACE=$route_interface
             fi
-        elif [[ "$first" =~ ^[0-9]+:$ ]] && [ "${#METRIC_INTERFACES[@]}" -lt 4 ] &&
-            { [ -z "$NETWORK_INTERFACE" ] || [ "${second%%@*}" = "$NETWORK_INTERFACE" ]; }; then
-            [ "${#METRIC_INTERFACES[@]}" -eq 0 ] && METRIC_INTERFACE="$second $fourth"
-            METRIC_INTERFACES+=("$second  $fourth")
+        elif [[ "$first" =~ ^[0-9]+:$ ]]; then
+            normalized_interface=${second%%@*}
+            if [ "${#METRIC_ALL_INTERFACES[@]}" -lt 16 ]; then
+                METRIC_ALL_INTERFACES+=("$second $fourth")
+            fi
+            if { [ -z "$NETWORK_INTERFACE" ] || [ "$normalized_interface" = "$NETWORK_INTERFACE" ]; } &&
+                [ "${#METRIC_INTERFACES[@]}" -lt 4 ]; then
+                [ "${#METRIC_INTERFACES[@]}" -eq 0 ] && METRIC_INTERFACE="$second $fourth"
+                METRIC_INTERFACES+=("$second  $fourth")
+            fi
         fi
     done < <(ip -o -4 -batch - 2>/dev/null <<< $'address show up scope global\nroute show default')
 
@@ -794,6 +812,11 @@ panel() {
     printf '+%s+\n' "$(repeat_char "-" "$border_width")"
 }
 
+pause_label() {
+    [ "$PAUSED" -eq 1 ] && printf ' | PAUSED'
+    return 0
+}
+
 blank_line() {
     printf '%*s' "$1" ''
 }
@@ -847,12 +870,15 @@ process_panel() {
     local inner=$((width - 4))
     local name_width=$((inner - 26))
     local line
+    local cpu_header=CPU
+    local mem_header=MEM
     local -a rows
 
     [ "$name_width" -lt 8 ] && name_width=8
     [ "$name_width" -gt 28 ] && name_width=28
 
-    rows+=("PID    COMMAND$(repeat_char " " "$((name_width - 7))")     CPU${METRIC_PROCESS_CPU_MODE:+ }${METRIC_PROCESS_CPU_MODE^^}    MEM")
+    [ "$PROCESS_SORT" = cpu ] && cpu_header='CPU*' || mem_header='MEM*'
+    rows+=("PID    COMMAND$(repeat_char " " "$((name_width - 7))")     $cpu_header${METRIC_PROCESS_CPU_MODE:+ }${METRIC_PROCESS_CPU_MODE^^}    $mem_header")
 
     while IFS= read -r line; do
         rows+=("$line")
@@ -862,14 +888,15 @@ process_panel() {
         rows+=("No process data available")
     fi
 
-    panel "$width" "Top Processes" "${rows[@]}"
+    panel "$width" "Top Processes ($PROCESS_SORT sort)" "${rows[@]}"
 }
 
 render_header() {
     local width="$1"
-    local title="${BOLD}${CYAN}PC COMMAND CENTER${RESET}"
+    local title
     local status
 
+    title="${BOLD}${CYAN}PC COMMAND CENTER$(pause_label)${RESET}"
     status="$METRIC_USER@$METRIC_HOST | $METRIC_TIME | $METRIC_UPTIME | every ${REFRESH_INTERVAL}s"
 
     printf '%s\n' "$(center_ansi "$title" "$width")"
@@ -884,7 +911,7 @@ render_compact_header() {
     local status
 
     host="$METRIC_USER@$METRIC_HOST"
-    title="${BOLD}${CYAN}PC COMMAND CENTER${RESET}"
+    title="${BOLD}${CYAN}PC COMMAND CENTER$(pause_label)${RESET}"
     status="${METRIC_TIME#* } | $METRIC_UPTIME | every ${REFRESH_INTERVAL}s"
 
     print_fit_line "$width" "$title | $host | ${REFRESH_INTERVAL}s"
@@ -947,12 +974,15 @@ compact_process_rows() {
     local limit="$2"
     local name_width=$((width - 25))
     local line
+    local cpu_header=CPU
+    local mem_header=MEM
 
     [ "$name_width" -lt 10 ] && name_width=10
     [ "$name_width" -gt 30 ] && name_width=30
 
     print_fit_line "$width" "${BLUE}TOP${RESET}"
-    print_fit_line "$width" "PID    COMMAND$(repeat_char " " "$((name_width - 7))")    CPU${METRIC_PROCESS_CPU_MODE:+ }${METRIC_PROCESS_CPU_MODE^^}   MEM"
+    [ "$PROCESS_SORT" = cpu ] && cpu_header='CPU*' || mem_header='MEM*'
+    print_fit_line "$width" "PID    COMMAND$(repeat_char " " "$((name_width - 7))")    $cpu_header${METRIC_PROCESS_CPU_MODE:+ }${METRIC_PROCESS_CPU_MODE^^}   $mem_header"
 
     while IFS= read -r line; do
         print_fit_line "$width" "$line"
@@ -975,14 +1005,16 @@ format_process_rows() {
 
 top_process_summary() {
     local name_width="$1"
+    local metric_index=3
 
     [ "$name_width" -lt 6 ] && name_width=6
-    awk -v nw="$name_width" '
+    [ "$PROCESS_SORT" = mem ] && metric_index=4
+    awk -v nw="$name_width" -v metric_index="$metric_index" '
         NF >= 4 {
             name = $2
             for (i = 3; i <= NF - 2; i++) name = name " " $i
             if (length(name) > nw) name = substr(name, 1, nw - 1) "~"
-            printf "%s %s%%", name, $(NF - 1)
+            printf "%s %s%%", name, $(metric_index == 4 ? NF : NF - 1)
             found = 1
             exit
         }
@@ -1014,7 +1046,7 @@ render_mini_dashboard() {
     temp_color=$(status_color "$METRIC_TEMP_PERCENT" "$TEMP_WARN" "$TEMP_CRIT")
     swap_color=$(status_color "$METRIC_SWAP_PERCENT" "$SWAP_WARN" "$SWAP_CRIT")
 
-    print_fit_line "$width" "${BOLD}${CYAN}PCC MINI${RESET} | $METRIC_HOST | ${REFRESH_INTERVAL}s"
+    print_fit_line "$width" "${BOLD}${CYAN}PCC MINI$(pause_label)${RESET} | $METRIC_HOST | ${REFRESH_INTERVAL}s"
     print_fit_line "$width" "${METRIC_TIME#* } | $METRIC_UPTIME"
     printf '%s\n' "$(repeat_char "-" "$width")"
 
@@ -1035,11 +1067,11 @@ render_mini_dashboard() {
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
     if [ "$lines" -ge 12 ]; then
-        print_fit_line "$width" "TOP ${METRIC_PROCESS_CPU_MODE^^} $(top_process_summary "$((width - 20))")"
+        print_fit_line "$width" "TOP ${PROCESS_SORT^^} $(top_process_summary "$((width - 20))")"
     fi
 
     printf '%s\n' "$(repeat_char "-" "$width")"
-    print_fit_line "$width" "q quit | r refresh"
+    print_fit_line "$width" "q/r +/- c/m p ? n"
 }
 
 render_micro_dashboard() {
@@ -1059,14 +1091,14 @@ render_micro_dashboard() {
     disk_color=$(status_color "$METRIC_DISK_PERCENT" "$DISK_WARN" "$DISK_CRIT")
     temp_color=$(status_color "$METRIC_TEMP_PERCENT" "$TEMP_WARN" "$TEMP_CRIT")
 
-    print_fit_line "$width" "${BOLD}${CYAN}PCC MICRO${RESET} | ${REFRESH_INTERVAL}s"
+    print_fit_line "$width" "${BOLD}${CYAN}PCC MICRO$(pause_label)${RESET} | ${REFRESH_INTERVAL}s"
     printf '%s\n' "$(repeat_char "-" "$width")"
     print_fit_line "$width" "CPU $(colorize "$cpu_color" "${METRIC_CPU}%") | RAM $(colorize "$mem_color" "${METRIC_MEM_PERCENT}%")"
     print_fit_line "$width" "DSK $(colorize "$disk_color" "${METRIC_DISK_PERCENT}%") | TMP $(colorize "$temp_color" "$METRIC_TEMP_SHORT")"
     print_fit_line "$width" "LOAD $METRIC_LOAD_ONE | SWAP ${METRIC_SWAP_PERCENT}%"
     [ "$lines" -ge 10 ] && print_fit_line "$width" "$METRIC_DISK_LABEL ${METRIC_DISK_AVAILABLE:-N/A} free"
     printf '%s\n' "$(repeat_char "-" "$width")"
-    print_fit_line "$width" "q quit | r refresh"
+    print_fit_line "$width" "q/r +/- c/m p ? n"
 }
 
 render_tiny_fallback() {
@@ -1075,10 +1107,10 @@ render_tiny_fallback() {
 
     [ "$width" -lt 1 ] && width=1
 
-    print_fit_line "$width" "${BOLD}${CYAN}PCC${RESET} ${REFRESH_INTERVAL}s"
+    print_fit_line "$width" "${BOLD}${CYAN}PCC$(pause_label)${RESET} ${REFRESH_INTERVAL}s"
     print_fit_line "$width" "CPU ${METRIC_CPU}% RAM ${METRIC_MEM_PERCENT}%"
     print_fit_line "$width" "DSK ${METRIC_DISK_PERCENT}%"
-    print_fit_line "$width" "q/r"
+    print_fit_line "$width" "q/r +/- c/m p ? n"
 }
 
 render_compact_dashboard() {
@@ -1119,7 +1151,7 @@ render_compact_dashboard() {
     printf '%s\n' "$(repeat_char "-" "$width")"
     compact_process_rows "$width" "$process_limit"
     printf '%s\n' "$(repeat_char "-" "$width")"
-    print_fit_line "$width" "Controls: q quit | r refresh | + faster | - slower"
+    print_fit_line "$width" "Controls: q/r +/- c/m p ? n"
 }
 
 render_wide_dashboard() {
@@ -1167,7 +1199,7 @@ render_wide_dashboard() {
 
     process_panel "$width" "$process_limit"
     printf '%s\n' "$(repeat_char "-" "$width")"
-    printf '%s\n' "$(pad_ansi "Controls: q quit | r refresh | + faster | - slower" "$width")"
+    printf '%s\n' "$(pad_ansi "Controls: q/r +/- c/m sort | p pause | ? help | n net" "$width")"
 
     if [ "$LIVE_MODE" -eq 1 ]; then
         tput_cmd ed
@@ -1218,8 +1250,87 @@ render_dashboard() {
     fi
 }
 
+render_help_overlay() {
+    local width="$TERM_COLS"
+    local lines="$TERM_LINES"
+
+    if [ "$LIVE_MODE" -eq 1 ] && [ "$RESIZE_PENDING" -eq 1 ]; then
+        read_dimensions
+        width=$TERM_COLS
+        lines=$TERM_LINES
+    fi
+    [ "$width" -gt 120 ] && width=120
+    [ "$width" -lt 1 ] && width=1
+    if [ "$LIVE_MODE" -eq 1 ]; then
+        tput_cmd cup 0 0
+    fi
+    if [ "$lines" -ge 5 ]; then
+        print_fit_line "$width" "PC COMMAND CENTER HELP"
+        if [ "$width" -ge 40 ]; then
+            print_fit_line "$width" "q quit | r refresh | +/- speed"
+            print_fit_line "$width" "c CPU | m memory | p pause/resume"
+            print_fit_line "$width" "n network interface | ? help"
+            print_fit_line "$width" "Any key dismisses help and redraws"
+        else
+            print_fit_line "$width" "q quit r refresh +/- speed"
+            print_fit_line "$width" "c CPU m MEM p pause"
+            print_fit_line "$width" "n network ? help"
+            print_fit_line "$width" "Any key dismisses"
+        fi
+        [ "$lines" -ge 6 ] && print_fit_line "$width" "Sort: $PROCESS_SORT | Refresh: ${REFRESH_INTERVAL}s"
+    elif [ "$lines" -ge 3 ]; then
+        print_fit_line "$width" "q/r +/- c/m p ? n"
+        print_fit_line "$width" "quit refresh sort pause"
+        print_fit_line "$width" "network/help; any key hides"
+    else
+        print_fit_line "$width" "q/r +/- c/m p ? n"
+    fi
+    if [ "$LIVE_MODE" -eq 1 ]; then
+        tput_cmd ed
+    fi
+}
+
+cycle_network_interface() {
+    local entry interface current="${NETWORK_INTERFACE:-$METRIC_NET_INTERFACE}"
+    local index=-1 next
+    local -a interfaces=()
+
+    for entry in "${METRIC_ALL_INTERFACES[@]}"; do
+        interface=${entry%% *}
+        interface=${interface%%@*}
+        case " ${interfaces[*]} " in
+            *" $interface "*) ;;
+            *) interfaces+=("$interface") ;;
+        esac
+    done
+    [ "${#interfaces[@]}" -gt 1 ] || return 1
+    for ((index = 0; index < ${#interfaces[@]}; index++)); do
+        [ "${interfaces[$index]}" = "$current" ] && break
+    done
+    [ "$index" -ge "${#interfaces[@]}" ] && index=-1
+    next=$(((index + 1) % ${#interfaces[@]}))
+    NETWORK_INTERFACE=${interfaces[$next]}
+    return 0
+}
+
+schedule_next_draw() {
+    if [ "$PAUSED" -eq 1 ] || [ "$HELP_VISIBLE" -eq 1 ]; then
+        NEXT_DRAW=0
+    else
+        NEXT_DRAW=$(( ${EPOCHSECONDS:-$SECONDS} + REFRESH_INTERVAL ))
+    fi
+}
+
 handle_key() {
     local key="$1"
+
+    if [ "$HELP_VISIBLE" -eq 1 ]; then
+        HELP_VISIBLE=0
+        RESIZE_PENDING=1
+        render_dashboard
+        schedule_next_draw
+        return 0
+    fi
 
     case "$key" in
         q|Q)
@@ -1227,19 +1338,49 @@ handle_key() {
             ;;
         r|R)
             render_dashboard
-            NEXT_DRAW=$(( ${EPOCHSECONDS:-$SECONDS} + REFRESH_INTERVAL ))
+            schedule_next_draw
             ;;
         +|=)
             if [ "$REFRESH_INTERVAL" -gt 1 ]; then
                 REFRESH_INTERVAL=$((REFRESH_INTERVAL - 1))
             fi
             render_dashboard
-            NEXT_DRAW=$(( ${EPOCHSECONDS:-$SECONDS} + REFRESH_INTERVAL ))
+            schedule_next_draw
             ;;
         -|_)
             REFRESH_INTERVAL=$((REFRESH_INTERVAL + 1))
             render_dashboard
-            NEXT_DRAW=$(( ${EPOCHSECONDS:-$SECONDS} + REFRESH_INTERVAL ))
+            schedule_next_draw
+            ;;
+        c|C)
+            PROCESS_SORT=cpu
+            render_dashboard
+            schedule_next_draw
+            ;;
+        m|M)
+            PROCESS_SORT=mem
+            render_dashboard
+            schedule_next_draw
+            ;;
+        p|P)
+            if [ "$PAUSED" -eq 1 ]; then
+                PAUSED=0
+            else
+                PAUSED=1
+            fi
+            render_dashboard
+            schedule_next_draw
+            ;;
+        \?)
+            HELP_VISIBLE=1
+            NEXT_DRAW=0
+            render_help_overlay
+            ;;
+        n|N)
+            if cycle_network_interface; then
+                render_dashboard
+                schedule_next_draw
+            fi
             ;;
     esac
 }
@@ -1268,11 +1409,16 @@ run_live() {
 
         now=${EPOCHSECONDS:-$SECONDS}
         if [ "$RESIZE_PENDING" -eq 1 ]; then
-            NEXT_DRAW=0
+            if [ "$HELP_VISIBLE" -eq 1 ]; then
+                render_help_overlay
+            else
+                render_dashboard
+                schedule_next_draw
+            fi
         fi
-        if [ "$now" -ge "$NEXT_DRAW" ]; then
+        if [ "$PAUSED" -eq 0 ] && [ "$HELP_VISIBLE" -eq 0 ] && [ "$now" -ge "$NEXT_DRAW" ]; then
             render_dashboard
-            NEXT_DRAW=$(( ${EPOCHSECONDS:-$SECONDS} + REFRESH_INTERVAL ))
+            schedule_next_draw
         fi
     done
 }

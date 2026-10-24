@@ -25,7 +25,7 @@ instead of clearing and repainting the whole screen on every refresh.
 - Battery charge and charging state when a battery is present (wide view)
 - Status colors for healthy, warning, and high-usage values
 - Responsive compact, mini, micro, and tiny views for smaller terminals
-- Keyboard controls for quitting, refreshing, and changing refresh speed
+- Live controls for process sorting, pause/resume, help, and network interface selection
 - Optional one-shot output mode for quick checks or scripts
 - Optional wide layout for larger terminal windows
 - Optional configuration for refresh, colors, thresholds, filesystem, interface, and layout
@@ -169,6 +169,10 @@ selection uses the `DISK` free-space label instead of `ROOT`.
 - `r` refreshes immediately.
 - `+` makes the dashboard refresh faster, down to 1 second.
 - `-` makes the dashboard refresh slower.
+- `c` sorts the live process list by interval CPU; `m` sorts by memory.
+- `p` pauses or resumes automatic refresh; input remains active while paused.
+- `?` shows the key list; any key dismisses it and redraws the dashboard.
+- `n` cycles the selected network interface when more than one is active.
 
 ## Refresh Behavior
 
@@ -187,7 +191,7 @@ automatically:
 - `COMPACT` keeps system, health, network, and process sections.
 - `MINI` keeps core system health, swap/root free space, and one top process.
 - `MICRO` keeps CPU, RAM, disk, temperature, load, swap, and short controls.
-- Very tiny terminals fall back to CPU, RAM, disk, and `q/r`.
+- Very tiny terminals fall back to CPU, RAM, disk, and abbreviated controls.
 
 The live dashboard reads terminal dimensions at startup and after a window resize
 signal (`SIGWINCH`). Idle ticks use Bash's built-in clock and spawn no subprocesses.
@@ -211,7 +215,7 @@ swap share one `free` call; process count and top processes share one `ps` snaps
 
 ## Development and project direction
 
-The current version is **1.4.0**. Runtime requirements are unchanged; Bats and
+The current version is **2.1.0**. Runtime requirements are unchanged; Bats and
 ShellCheck are development tools only. On Ubuntu, install them and run:
 
 ```bash
@@ -223,7 +227,7 @@ bats tests
 
 GitHub Actions runs these syntax, lint, and regression checks on pushes and pull
 requests. The tests cover formatting, CPU delta math, temperature/process parsing,
-CLI validation, layout routing boundaries, and snapshots of all five layouts.
+CLI validation, layout routing boundaries, telemetry deltas, and snapshots of all five layouts.
 Snapshot tests check layout properties rather than changing live metric values.
 Additional checks cover consecutive CPU samples, one collection per source per
 frame, absent data, cached terminal dimensions, and refresh-key scheduling.
@@ -234,8 +238,7 @@ The script can also be sourced to test functions without launching the dashboard
 Project planning notes are kept locally in the ignored `doc/` directory.
 See the [changelog](CHANGELOG.md) for user-facing release history.
 
-The next planned stage is **v2.0**: network throughput, interval process CPU,
-battery status, and per-core CPU bars.
+The next planned stage is **v3.0**: installable packaging and release artifacts.
 
 ## License
 

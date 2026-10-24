@@ -79,5 +79,5 @@ setup() {
     METRIC_PROCESSES='1234 worker 12.3 4.5'
     run process_panel 80 1
     [ "$status" -eq 0 ]
-    [[ "$output" == *'CPU AVG'* ]]
+    [[ "$output" == *'CPU* AVG'* ]]
 }
