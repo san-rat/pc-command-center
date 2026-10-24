@@ -1,7 +1,7 @@
 # PC Command Center — contributor guide
 
 Single-file Bash TUI for Ubuntu/Linux. Runtime code is in
-`pc-command-center.sh`; current version is 1.2.0. No build system or new runtime
+`pc-command-center.sh`; current version is 1.3.0. No build system or new runtime
 dependencies. Project docs in `doc/` are version controlled.
 
 ## Commands
@@ -25,8 +25,10 @@ snapshots. Test tooling is optional for end users.
 
 - Bash >= 4 and GNU/Linux tools; no macOS compatibility layer.
 - `snake_case` functions, local function variables, uppercase globals in the header.
-- `get_*` collectors return data through stdout. Layout refactoring is v1.3 work;
-  do not mix it into correctness changes.
+- `collect_metrics` runs once per frame in the parent shell and fills `METRIC_*`.
+  Renderers only consume those values; do not collect data inside a renderer.
+- Share process rows through `format_process_rows`. `read_dimensions` caches
+  terminal size in live mode until a `WINCH` signal marks it dirty.
 - Use `tput_cmd` for terminal capabilities and validate numeric output before
   arithmetic; failed terminal queries return an empty string.
 - Use `pad_ansi`, `center_ansi`, and `print_fit_line` for width-sensitive output.
@@ -34,10 +36,10 @@ snapshots. Test tooling is optional for end users.
 - Colors use `setup_colors` variables and `$RESET`; honor `--no-color`.
 - Keep compact width capped at 88 columns. Tier thresholds: compact 60x20,
   mini 45x12, micro 36x8, otherwise tiny. `--wide` selects the wide layout.
-- First render waits 0.25s for a CPU sample. Current command-substitution calls
-  lose CPU baseline updates (gap 13); fix parent-shell collection in v1.3.
-  `ps` process CPU remains a lifetime
+- First render waits 0.25s for a CPU sample. Call `get_cpu_usage` directly so
+  `PREV_CPU_*` advances in the parent shell. `ps` process CPU remains a lifetime
   average; interval sampling is planned for v2.0.
+- Schedule with `${EPOCHSECONDS:-$SECONDS}`; never spawn `date` in the idle loop.
 - Live repaint uses `cup 0 0` + redraw + `ed`. Do not clear on every refresh.
 - Keep terminal setup paired with EXIT cleanup; intentional `tput`/`stty` error
   guards prevent missing terminal capabilities from crashing the dashboard.
@@ -50,7 +52,7 @@ snapshots. Test tooling is optional for end users.
 
 - `doc/PROJECT.md`: architecture and rationale.
 - `doc/GAPS.md`: original audit plus current resolution status.
-- `doc/ROADMAP.md`: version specs; v1.1 complete, v1.2 implemented, v1.3 next.
+- `doc/ROADMAP.md`: version specs; v1.3 implemented, v1.4 next.
 - `doc/WORKLOG.md`: dated implementation and verification record.
 - `CHANGELOG.md`: user-facing changes.
 

@@ -10,8 +10,11 @@ refer to **GAPS.md**, which preserves the original audit.
 - **v1.2 implemented:** regression tests, lint fixes, CI workflow, MIT license,
   source guard, and `--version`. Local verification is recorded in
   [WORKLOG.md](WORKLOG.md); the hosted CI run remains unverified until pushed.
-- **Next: v1.3.** Use the v1.2 test suite before and after the performance refactor.
-- v1.4, v2.0, v2.1, and v3.0 remain planned; their specs below are not implemented.
+- **v1.3 implemented:** parent-shell collection, shared formatters/dimensions,
+  and signal-driven resizing. Local checks pass; all five deterministic fixture
+  layouts match v1.2, and idle subprocesses dropped to zero in a two-second sample.
+  See [WORKLOG.md](WORKLOG.md) for measurements and terminal checks.
+- **Next: v1.4.** Configurability; v2.0, v2.1, and v3.0 also remain planned.
 
 The original v1.0 baseline was `3bcedcf`.
 
@@ -46,7 +49,7 @@ The original v1.0 baseline was `3bcedcf`.
 
 **Done when:** CI is green on a fresh clone; deliberately re-introducing the gap-1 awk bug makes a test fail.
 
-## v1.3 — Single-pass engine (next)
+## v1.3 — Single-pass engine (implemented; hosted CI pending)
 
 **Goal:** Same pixels on screen, a fraction of the work: one data-collection pass per frame, near-zero idle cost. This is the refactor that makes v1.4/v2.0 cheap. Do not attempt before v1.2 — the tests are the regression net.
 

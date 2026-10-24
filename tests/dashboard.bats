@@ -81,6 +81,7 @@ setup() {
             *) return 1 ;;
         esac
     }
+    METRIC_PROCESSES=$(ps -eo pid=,comm=,%cpu=,%mem= --sort=-%cpu)
     run process_panel 80 2
     [ "$status" -eq 0 ]
     [[ "$output" =~ Isolated\ Web\ Co[[:space:]]+12\.3%[[:space:]]+4\.5% ]]
@@ -130,6 +131,7 @@ setup() {
 
 @test "layout routing respects both dimension boundaries" {
     tput_cmd() { :; }
+    collect_metrics() { :; }
     render_compact_dashboard() { echo compact; }
     render_mini_dashboard() { echo mini; }
     render_micro_dashboard() { echo micro; }

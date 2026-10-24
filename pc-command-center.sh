@@ -3,7 +3,7 @@
 # PC Command Center
 # A lightweight terminal dashboard for Ubuntu/Linux systems.
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 REFRESH_INTERVAL=5
 ENABLE_COLOR=1
 ONCE=0
@@ -16,6 +16,35 @@ PREV_CPU_TOTAL=0
 CPU_IDLE=0
 CPU_TOTAL=0
 NEXT_DRAW=0
+RESIZE_PENDING=1
+TERM_COLS=80
+TERM_LINES=24
+METRIC_CPU=0
+METRIC_MEM_USED=""
+METRIC_MEM_TOTAL=""
+METRIC_MEM_PERCENT=0
+METRIC_SWAP_USED=0B
+METRIC_SWAP_TOTAL=0B
+METRIC_SWAP_PERCENT=0
+METRIC_DISK_USED=""
+METRIC_DISK_TOTAL=""
+METRIC_DISK_AVAILABLE=""
+METRIC_DISK_PERCENT=0
+METRIC_TEMP="Not available"
+METRIC_TEMP_SHORT="N/A"
+METRIC_TEMP_PERCENT=0
+METRIC_LOAD=""
+METRIC_LOAD_ONE=0
+METRIC_LOAD_PERCENT=0
+METRIC_PROCESS_COUNT=0
+METRIC_PROCESSES=""
+METRIC_INTERFACE="No active IPv4"
+METRIC_GATEWAY=""
+METRIC_INTERFACES=()
+METRIC_UPTIME=""
+METRIC_HOST=""
+METRIC_USER=""
+METRIC_TIME=""
 
 RESET=""
 BOLD=""
@@ -273,51 +302,75 @@ get_cpu_usage() {
 
     PREV_CPU_IDLE=$CPU_IDLE
     PREV_CPU_TOTAL=$CPU_TOTAL
+    METRIC_CPU=$usage
     printf '%s' "$usage"
 }
 
-get_memory_info() {
-    free -h | awk '/Mem:/ {print $3, $2}'
-}
+collect_metrics() {
+    local cores load_five load_fifteen line first second third fourth fifth
 
-get_memory_percent() {
-    free -m | awk '/Mem:/ {if ($2 > 0) printf "%d", ($3 * 100 / $2); else printf "0"}'
-}
+    # CPU counters must advance in the parent shell, not a command substitution.
+    get_cpu_usage >/dev/null
 
-get_disk_info() {
-    df -hP / | awk 'NR==2 {print $3, $2, $5}'
-}
+    read -r METRIC_MEM_USED METRIC_MEM_TOTAL METRIC_MEM_PERCENT METRIC_SWAP_USED METRIC_SWAP_TOTAL METRIC_SWAP_PERCENT < <(
+        free -b | awk '
+            function human(bytes, unit, units) {
+                split("B Ki Mi Gi Ti Pi Ei", units, " ")
+                unit = 1
+                while (bytes >= 1024 && unit < 7) { bytes /= 1024; unit++ }
+                return sprintf(bytes < 10 && unit > 1 ? "%.1f%s" : "%d%s", bytes, units[unit])
+            }
+            function percent(used, total) {
+                used = int(used / 1048576)
+                total = int(total / 1048576)
+                return total > 0 ? int(used * 100 / total) : 0
+            }
+            /Mem:/ { mem = human($3) " " human($2) " " percent($3, $2) }
+            /Swap:/ { swap = human($3) " " human($2) " " percent($3, $2) }
+            END { print (mem ? mem : "N/A N/A 0"), (swap ? swap : "0B 0B 0") }
+        '
+    )
 
-get_disk_available() {
-    df -hP / | awk 'NR==2 {print $4}'
-}
+    read -r METRIC_DISK_USED METRIC_DISK_TOTAL METRIC_DISK_AVAILABLE METRIC_DISK_PERCENT < <(
+        df -hP / 2>/dev/null | awk 'NR==2 {print $3, $2, $4, $5}'
+    ) || true
+    METRIC_DISK_PERCENT=${METRIC_DISK_PERCENT%\%}
+    METRIC_DISK_PERCENT=${METRIC_DISK_PERCENT:-0}
 
-get_load_average() {
-    awk '{print $1, $2, $3}' /proc/loadavg
-}
-
-get_load_percent() {
-    local load
-    local cores
-
-    load=$(awk '{print $1}' /proc/loadavg)
+    read -r METRIC_LOAD_ONE load_five load_fifteen _ < /proc/loadavg
+    METRIC_LOAD="$METRIC_LOAD_ONE $load_five $load_fifteen"
     cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
     [[ "$cores" =~ ^[0-9]+$ ]] || cores=1
     [ "$cores" -lt 1 ] && cores=1
+    METRIC_LOAD_PERCENT=$(awk -v load="$METRIC_LOAD_ONE" -v cores="$cores" 'BEGIN {printf "%d", load * 100 / cores}')
 
-    awk -v load="$load" -v cores="$cores" 'BEGIN {printf "%d", (load * 100) / cores}'
-}
+    METRIC_TEMP=$(get_temperature)
+    METRIC_TEMP_PERCENT=$(temperature_number "$METRIC_TEMP")
+    METRIC_TEMP_SHORT=$METRIC_TEMP
+    [ "$METRIC_TEMP" = "Not available" ] && METRIC_TEMP_SHORT="N/A"
 
-get_process_count() {
-    ps -e --no-headers 2>/dev/null | wc -l | awk '{print $1}'
-}
+    METRIC_PROCESSES=$(ps -eo pid=,comm=,%cpu=,%mem= --sort=-%cpu 2>/dev/null)
+    METRIC_PROCESS_COUNT=0
+    while IFS= read -r line; do
+        [ -n "$line" ] && METRIC_PROCESS_COUNT=$((METRIC_PROCESS_COUNT + 1))
+    done <<< "$METRIC_PROCESSES"
 
-get_swap_info() {
-    free -h | awk '/Swap:/ {print $3, $2}'
-}
+    METRIC_INTERFACES=()
+    METRIC_INTERFACE="No active IPv4"
+    METRIC_GATEWAY=""
+    while read -r first second third fourth fifth _; do
+        if [ "$first" = default ] && [ -z "$METRIC_GATEWAY" ]; then
+            METRIC_GATEWAY="$third via $fifth"
+        elif [[ "$first" =~ ^[0-9]+:$ ]] && [ "${#METRIC_INTERFACES[@]}" -lt 4 ]; then
+            [ "${#METRIC_INTERFACES[@]}" -eq 0 ] && METRIC_INTERFACE="$second $fourth"
+            METRIC_INTERFACES+=("$second  $fourth")
+        fi
+    done < <(ip -o -4 -batch - 2>/dev/null <<< $'address show up scope global\nroute show default')
 
-get_swap_percent() {
-    free -m | awk '/Swap:/ {if ($2 > 0) printf "%d", ($3 * 100 / $2); else printf "0"}'
+    METRIC_UPTIME=$(uptime -p)
+    METRIC_HOST=$(hostname)
+    METRIC_USER=$(whoami)
+    METRIC_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 }
 
 get_temperature() {
@@ -410,66 +463,35 @@ blank_line() {
 
 system_panel() {
     local width="$1"
-    local cpu
-    local mem_used
-    local mem_total
-    local mem_percent
-    local disk_used
-    local disk_total
-    local disk_percent_text
-    local disk_percent
-    local temp
-    local temp_percent
-    local temp_display
     local -a rows
 
-    cpu=$(get_cpu_usage)
-    read -r mem_used mem_total <<< "$(get_memory_info)"
-    mem_percent=$(get_memory_percent)
-    read -r disk_used disk_total disk_percent_text <<< "$(get_disk_info)"
-    disk_percent=${disk_percent_text%\%}
-    temp=$(get_temperature)
-    temp_percent=$(temperature_number "$temp")
-
-    if [ "$temp" = "Not available" ]; then
-        temp_display="Not available"
-        temp_percent=0
-    else
-        temp_display="$temp"
-    fi
-
-    rows+=("$(metric_line "CPU" "${cpu}%" "$cpu" 60 85)")
-    rows+=("$(metric_line "RAM" "${mem_used}/${mem_total} ${mem_percent}%" "$mem_percent" 75 90)")
-    rows+=("$(metric_line "Disk" "${disk_used}/${disk_total} ${disk_percent}%" "$disk_percent" 75 90)")
-    rows+=("$(metric_line "Temp" "$temp_display" "$temp_percent" 70 85)")
+    rows+=("$(metric_line "CPU" "${METRIC_CPU}%" "$METRIC_CPU" 60 85)")
+    rows+=("$(metric_line "RAM" "${METRIC_MEM_USED}/${METRIC_MEM_TOTAL} ${METRIC_MEM_PERCENT}%" "$METRIC_MEM_PERCENT" 75 90)")
+    rows+=("$(metric_line "Disk" "${METRIC_DISK_USED}/${METRIC_DISK_TOTAL} ${METRIC_DISK_PERCENT}%" "$METRIC_DISK_PERCENT" 75 90)")
+    rows+=("$(metric_line "Temp" "$METRIC_TEMP" "$METRIC_TEMP_PERCENT" 70 85)")
     rows+=("")
-    rows+=("Uptime     $(uptime -p)")
+    rows+=("Uptime     $METRIC_UPTIME")
 
     panel "$width" "System Usage" "${rows[@]}"
 }
 
 network_panel() {
     local width="$1"
-    local gateway
     local line
     local -a rows
-    local -a interfaces
-
-    mapfile -t interfaces < <(ip -o -4 addr show up scope global 2>/dev/null | awk '{print $2 "  " $4}' | head -n 4)
-    gateway=$(ip route 2>/dev/null | awk '/default/ {print $3 " via " $5; exit}')
 
     rows+=("Interfaces")
-    if [ "${#interfaces[@]}" -eq 0 ]; then
+    if [ "${#METRIC_INTERFACES[@]}" -eq 0 ]; then
         rows+=("  No active IPv4 interface")
     else
-        for line in "${interfaces[@]}"; do
+        for line in "${METRIC_INTERFACES[@]}"; do
             rows+=("  $line")
         done
     fi
 
     rows+=("")
     rows+=("Gateway")
-    rows+=("  ${gateway:-Not available}")
+    rows+=("  ${METRIC_GATEWAY:-Not available}")
 
     panel "$width" "Network" "${rows[@]}"
 }
@@ -489,25 +511,7 @@ process_panel() {
 
     while IFS= read -r line; do
         rows+=("$line")
-    done < <(
-        ps -eo pid=,comm=,%cpu=,%mem= --sort=-%cpu 2>/dev/null |
-            head -n "$limit" |
-            awk -v nw="$name_width" '
-                {
-                    pid = $1
-                    cpu = $(NF - 1)
-                    mem = $NF
-                    name = $2
-                    for (i = 3; i <= NF - 2; i++) {
-                        name = name " " $i
-                    }
-                    if (length(name) > nw) {
-                        name = substr(name, 1, nw - 1) "~"
-                    }
-                    printf "%5s  %-*s %6s %6s\n", pid, nw, name, cpu "%", mem "%"
-                }
-            '
-    )
+    done < <(format_process_rows "$name_width" "$limit" 6)
 
     if [ "${#rows[@]}" -eq 1 ]; then
         rows+=("No process data available")
@@ -521,7 +525,7 @@ render_header() {
     local title="${BOLD}${CYAN}PC COMMAND CENTER${RESET}"
     local status
 
-    status="$(whoami)@$(hostname) | $(date '+%Y-%m-%d %H:%M:%S') | $(uptime -p) | every ${REFRESH_INTERVAL}s"
+    status="$METRIC_USER@$METRIC_HOST | $METRIC_TIME | $METRIC_UPTIME | every ${REFRESH_INTERVAL}s"
 
     printf '%s\n' "$(center_ansi "$title" "$width")"
     printf '%s\n' "$(pad_ansi "$status" "$width")"
@@ -534,9 +538,9 @@ render_compact_header() {
     local title
     local status
 
-    host="$(whoami)@$(hostname)"
+    host="$METRIC_USER@$METRIC_HOST"
     title="${BOLD}${CYAN}PC COMMAND CENTER${RESET}"
-    status="$(date '+%H:%M:%S') | $(uptime -p) | every ${REFRESH_INTERVAL}s"
+    status="${METRIC_TIME#* } | $METRIC_UPTIME | every ${REFRESH_INTERVAL}s"
 
     print_fit_line "$width" "$title | $host | ${REFRESH_INTERVAL}s"
     print_fit_line "$width" "$status"
@@ -546,104 +550,50 @@ render_compact_header() {
 compact_system_rows() {
     local width="$1"
     local bar_width="$2"
-    local cpu
-    local mem_used
-    local mem_total
-    local mem_percent
-    local disk_used
-    local disk_total
-    local disk_percent_text
-    local disk_percent
-    local temp
-    local temp_percent
-    local temp_display
     local left
     local right
     local half
 
-    cpu=$(get_cpu_usage)
-    read -r mem_used mem_total <<< "$(get_memory_info)"
-    mem_percent=$(get_memory_percent)
-    read -r disk_used disk_total disk_percent_text <<< "$(get_disk_info)"
-    disk_percent=${disk_percent_text%\%}
-    temp=$(get_temperature)
-    temp_percent=$(temperature_number "$temp")
-
-    if [ "$temp" = "Not available" ]; then
-        temp_display="N/A"
-        temp_percent=0
-    else
-        temp_display="$temp"
-    fi
-
     half=$(((width - 2) / 2))
-    left="$(compact_metric "CPU" "${cpu}%" "$cpu" 60 85 "$bar_width")"
-    right="$(compact_metric "RAM" "${mem_used}/${mem_total} ${mem_percent}%" "$mem_percent" 75 90 "$bar_width")"
+    left="$(compact_metric "CPU" "${METRIC_CPU}%" "$METRIC_CPU" 60 85 "$bar_width")"
+    right="$(compact_metric "RAM" "${METRIC_MEM_USED}/${METRIC_MEM_TOTAL} ${METRIC_MEM_PERCENT}%" "$METRIC_MEM_PERCENT" 75 90 "$bar_width")"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
-    left="$(compact_metric "DSK" "${disk_used}/${disk_total} ${disk_percent}%" "$disk_percent" 75 90 "$bar_width")"
-    right="$(compact_metric "TMP" "$temp_display" "$temp_percent" 70 85 "$bar_width")"
+    left="$(compact_metric "DSK" "${METRIC_DISK_USED}/${METRIC_DISK_TOTAL} ${METRIC_DISK_PERCENT}%" "$METRIC_DISK_PERCENT" 75 90 "$bar_width")"
+    right="$(compact_metric "TMP" "$METRIC_TEMP_SHORT" "$METRIC_TEMP_PERCENT" 70 85 "$bar_width")"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 }
 
 compact_health_rows() {
     local width="$1"
-    local load_avg
-    local load_percent
-    local process_count
-    local swap_used
-    local swap_total
-    local swap_percent
-    local disk_available
     local load_color
     local swap_color
     local left
     local right
     local half
 
-    load_avg=$(get_load_average)
-    load_percent=$(get_load_percent)
-    process_count=$(get_process_count)
-    read -r swap_used swap_total <<< "$(get_swap_info)"
-    swap_percent=$(get_swap_percent)
-    disk_available=$(get_disk_available)
-
-    if [ -z "$swap_total" ] || [ "$swap_total" = "0B" ]; then
-        swap_used="0B"
-        swap_total="0B"
-        swap_percent=0
-    fi
-
-    load_color=$(status_color "$load_percent" 70 100)
-    swap_color=$(status_color "$swap_percent" 50 80)
+    load_color=$(status_color "$METRIC_LOAD_PERCENT" 70 100)
+    swap_color=$(status_color "$METRIC_SWAP_PERCENT" 50 80)
 
     half=$(((width - 2) / 2))
-    left="LOAD $(colorize "$load_color" "$load_avg")"
-    right="PROC ${process_count:-0}"
+    left="LOAD $(colorize "$load_color" "$METRIC_LOAD")"
+    right="PROC ${METRIC_PROCESS_COUNT:-0}"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
-    left="SWAP $(colorize "$swap_color" "${swap_used}/${swap_total} ${swap_percent}%")"
-    right="ROOT ${disk_available:-N/A} free"
+    left="SWAP $(colorize "$swap_color" "${METRIC_SWAP_USED}/${METRIC_SWAP_TOTAL} ${METRIC_SWAP_PERCENT}%")"
+    right="ROOT ${METRIC_DISK_AVAILABLE:-N/A} free"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 }
 
 compact_network_rows() {
     local width="$1"
     local row_limit="$2"
-    local interface
-    local gateway
-
-    interface=$(ip -o -4 addr show up scope global 2>/dev/null | awk '{print $2 " " $4; exit}')
-    gateway=$(ip route 2>/dev/null | awk '/default/ {print $3 " via " $5; exit}')
-
-    interface=${interface:-No active IPv4}
-    gateway=${gateway:-N/A}
 
     if [ "$row_limit" -le 1 ]; then
-        print_fit_line "$width" "${BLUE}NET${RESET} $interface | GW $gateway"
+        print_fit_line "$width" "${BLUE}NET${RESET} $METRIC_INTERFACE | GW ${METRIC_GATEWAY:-N/A}"
     else
-        print_fit_line "$width" "${BLUE}NET${RESET} $interface"
-        print_fit_line "$width" "${BLUE}GW ${RESET} $gateway"
+        print_fit_line "$width" "${BLUE}NET${RESET} $METRIC_INTERFACE"
+        print_fit_line "$width" "${BLUE}GW ${RESET} ${METRIC_GATEWAY:-N/A}"
     fi
 }
 
@@ -661,47 +611,38 @@ compact_process_rows() {
 
     while IFS= read -r line; do
         print_fit_line "$width" "$line"
-    done < <(
-        ps -eo pid=,comm=,%cpu=,%mem= --sort=-%cpu 2>/dev/null |
-            head -n "$limit" |
-            awk -v nw="$name_width" '
-                {
-                    pid = $1
-                    cpu = $(NF - 1)
-                    mem = $NF
-                    name = $2
-                    for (i = 3; i <= NF - 2; i++) {
-                        name = name " " $i
-                    }
-                    if (length(name) > nw) {
-                        name = substr(name, 1, nw - 1) "~"
-                    }
-                    printf "%5s  %-*s %5s %5s\n", pid, nw, name, cpu "%", mem "%"
-                }
-            '
-    )
+    done < <(format_process_rows "$name_width" "$limit" 5)
+}
+
+format_process_rows() {
+    local name_width="$1" limit="$2" percent_width="$3"
+
+    awk -v nw="$name_width" -v limit="$limit" -v pw="$percent_width" '
+        NF >= 4 && count < limit {
+            name = $2
+            for (i = 3; i <= NF - 2; i++) name = name " " $i
+            if (length(name) > nw) name = substr(name, 1, nw - 1) "~"
+            printf "%5s  %-*s %*s %*s\n", $1, nw, name, pw, $(NF - 1) "%", pw, $NF "%"
+            count++
+        }
+    ' <<< "$METRIC_PROCESSES"
 }
 
 top_process_summary() {
     local name_width="$1"
 
     [ "$name_width" -lt 6 ] && name_width=6
-
-    ps -eo comm=,%cpu= --sort=-%cpu 2>/dev/null |
-        head -n 1 |
-        awk -v nw="$name_width" '
-            {
-                name = $1
-                cpu = $NF
-                for (i = 2; i <= NF - 1; i++) {
-                    name = name " " $i
-                }
-                if (length(name) > nw) {
-                    name = substr(name, 1, nw - 1) "~"
-                }
-                printf "%s %s%%", name, cpu
-            }
-        '
+    awk -v nw="$name_width" '
+        NF >= 4 {
+            name = $2
+            for (i = 3; i <= NF - 2; i++) name = name " " $i
+            if (length(name) > nw) name = substr(name, 1, nw - 1) "~"
+            printf "%s %s%%", name, $(NF - 1)
+            found = 1
+            exit
+        }
+        END { if (!found) printf "N/A" }
+    ' <<< "$METRIC_PROCESSES"
 }
 
 render_mini_dashboard() {
@@ -709,24 +650,6 @@ render_mini_dashboard() {
     local lines="$2"
     local width="$cols"
     local half
-    local cpu
-    local mem_used
-    local mem_total
-    local mem_percent
-    local disk_used
-    local disk_total
-    local disk_percent_text
-    local disk_percent
-    local temp
-    local temp_percent
-    local temp_display
-    local load_avg
-    local process_count
-    local swap_used
-    local swap_total
-    local swap_percent
-    local disk_available
-    local top_process
     local left
     local right
     local cpu_color
@@ -740,55 +663,34 @@ render_mini_dashboard() {
     half=$(((width - 2) / 2))
     [ "$half" -lt 1 ] && half=1
 
-    cpu=$(get_cpu_usage)
-    read -r mem_used mem_total <<< "$(get_memory_info)"
-    mem_percent=$(get_memory_percent)
-    read -r disk_used disk_total disk_percent_text <<< "$(get_disk_info)"
-    disk_percent=${disk_percent_text%\%}
-    temp=$(get_temperature)
-    temp_percent=$(temperature_number "$temp")
-    load_avg=$(get_load_average)
-    process_count=$(get_process_count)
-    read -r swap_used swap_total <<< "$(get_swap_info)"
-    swap_percent=$(get_swap_percent)
-    disk_available=$(get_disk_available)
-    top_process=$(top_process_summary "$((width - 16))")
+    cpu_color=$(status_color "$METRIC_CPU" 60 85)
+    mem_color=$(status_color "$METRIC_MEM_PERCENT" 75 90)
+    disk_color=$(status_color "$METRIC_DISK_PERCENT" 75 90)
+    temp_color=$(status_color "$METRIC_TEMP_PERCENT" 70 85)
+    swap_color=$(status_color "$METRIC_SWAP_PERCENT" 50 80)
 
-    [ "$temp" = "Not available" ] && temp_display="N/A" || temp_display="$temp"
-    if [ -z "$swap_total" ] || [ "$swap_total" = "0B" ]; then
-        swap_used="0B"
-        swap_total="0B"
-        swap_percent=0
-    fi
-
-    cpu_color=$(status_color "$cpu" 60 85)
-    mem_color=$(status_color "$mem_percent" 75 90)
-    disk_color=$(status_color "$disk_percent" 75 90)
-    temp_color=$(status_color "$temp_percent" 70 85)
-    swap_color=$(status_color "$swap_percent" 50 80)
-
-    print_fit_line "$width" "${BOLD}${CYAN}PCC MINI${RESET} | $(hostname) | ${REFRESH_INTERVAL}s"
-    print_fit_line "$width" "$(date '+%H:%M:%S') | $(uptime -p)"
+    print_fit_line "$width" "${BOLD}${CYAN}PCC MINI${RESET} | $METRIC_HOST | ${REFRESH_INTERVAL}s"
+    print_fit_line "$width" "${METRIC_TIME#* } | $METRIC_UPTIME"
     printf '%s\n' "$(repeat_char "-" "$width")"
 
-    left="CPU $(bar "$cpu" 5 "$cpu_color") $(colorize "$cpu_color" "${cpu}%")"
-    right="RAM $(bar "$mem_percent" 5 "$mem_color") $(colorize "$mem_color" "${mem_percent}%")"
+    left="CPU $(bar "$METRIC_CPU" 5 "$cpu_color") $(colorize "$cpu_color" "${METRIC_CPU}%")"
+    right="RAM $(bar "$METRIC_MEM_PERCENT" 5 "$mem_color") $(colorize "$mem_color" "${METRIC_MEM_PERCENT}%")"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
-    left="DSK $(colorize "$disk_color" "${disk_percent}%")"
-    right="TMP $(colorize "$temp_color" "$temp_display")"
+    left="DSK $(colorize "$disk_color" "${METRIC_DISK_PERCENT}%")"
+    right="TMP $(colorize "$temp_color" "$METRIC_TEMP_SHORT")"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
-    left="LOAD $load_avg"
-    right="PROC ${process_count:-0}"
+    left="LOAD $METRIC_LOAD"
+    right="PROC ${METRIC_PROCESS_COUNT:-0}"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
-    left="SWAP $(colorize "$swap_color" "${swap_percent}%")"
-    right="ROOT ${disk_available:-N/A}"
+    left="SWAP $(colorize "$swap_color" "${METRIC_SWAP_PERCENT}%")"
+    right="ROOT ${METRIC_DISK_AVAILABLE:-N/A}"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
     if [ "$lines" -ge 12 ]; then
-        print_fit_line "$width" "TOP ${top_process:-N/A}"
+        print_fit_line "$width" "TOP $(top_process_summary "$((width - 16))")"
     fi
 
     printf '%s\n' "$(repeat_char "-" "$width")"
@@ -799,16 +701,6 @@ render_micro_dashboard() {
     local cols="$1"
     local lines="$2"
     local width="$cols"
-    local cpu
-    local mem_percent
-    local disk_percent_text
-    local disk_percent
-    local temp
-    local temp_percent
-    local temp_display
-    local load_one
-    local swap_percent
-    local disk_available
     local cpu_color
     local mem_color
     local disk_color
@@ -817,29 +709,17 @@ render_micro_dashboard() {
     [ "$width" -gt 44 ] && width=44
     [ "$width" -lt 1 ] && width=1
 
-    cpu=$(get_cpu_usage)
-    mem_percent=$(get_memory_percent)
-    read -r _ _ disk_percent_text <<< "$(get_disk_info)"
-    disk_percent=${disk_percent_text%\%}
-    temp=$(get_temperature)
-    temp_percent=$(temperature_number "$temp")
-    load_one=$(awk '{print $1}' /proc/loadavg)
-    swap_percent=$(get_swap_percent)
-    disk_available=$(get_disk_available)
-
-    [ "$temp" = "Not available" ] && temp_display="N/A" || temp_display="$temp"
-
-    cpu_color=$(status_color "$cpu" 60 85)
-    mem_color=$(status_color "$mem_percent" 75 90)
-    disk_color=$(status_color "$disk_percent" 75 90)
-    temp_color=$(status_color "$temp_percent" 70 85)
+    cpu_color=$(status_color "$METRIC_CPU" 60 85)
+    mem_color=$(status_color "$METRIC_MEM_PERCENT" 75 90)
+    disk_color=$(status_color "$METRIC_DISK_PERCENT" 75 90)
+    temp_color=$(status_color "$METRIC_TEMP_PERCENT" 70 85)
 
     print_fit_line "$width" "${BOLD}${CYAN}PCC MICRO${RESET} | ${REFRESH_INTERVAL}s"
     printf '%s\n' "$(repeat_char "-" "$width")"
-    print_fit_line "$width" "CPU $(colorize "$cpu_color" "${cpu}%") | RAM $(colorize "$mem_color" "${mem_percent}%")"
-    print_fit_line "$width" "DSK $(colorize "$disk_color" "${disk_percent}%") | TMP $(colorize "$temp_color" "$temp_display")"
-    print_fit_line "$width" "LOAD $load_one | SWAP ${swap_percent}%"
-    [ "$lines" -ge 10 ] && print_fit_line "$width" "ROOT ${disk_available:-N/A} free"
+    print_fit_line "$width" "CPU $(colorize "$cpu_color" "${METRIC_CPU}%") | RAM $(colorize "$mem_color" "${METRIC_MEM_PERCENT}%")"
+    print_fit_line "$width" "DSK $(colorize "$disk_color" "${METRIC_DISK_PERCENT}%") | TMP $(colorize "$temp_color" "$METRIC_TEMP_SHORT")"
+    print_fit_line "$width" "LOAD $METRIC_LOAD_ONE | SWAP ${METRIC_SWAP_PERCENT}%"
+    [ "$lines" -ge 10 ] && print_fit_line "$width" "ROOT ${METRIC_DISK_AVAILABLE:-N/A} free"
     printf '%s\n' "$(repeat_char "-" "$width")"
     print_fit_line "$width" "q quit | r refresh"
 }
@@ -847,21 +727,12 @@ render_micro_dashboard() {
 render_tiny_fallback() {
     local cols="$1"
     local width="$cols"
-    local cpu
-    local mem_percent
-    local disk_percent_text
-    local disk_percent
 
     [ "$width" -lt 1 ] && width=1
 
-    cpu=$(get_cpu_usage)
-    mem_percent=$(get_memory_percent)
-    read -r _ _ disk_percent_text <<< "$(get_disk_info)"
-    disk_percent=${disk_percent_text%\%}
-
     print_fit_line "$width" "${BOLD}${CYAN}PCC${RESET} ${REFRESH_INTERVAL}s"
-    print_fit_line "$width" "CPU ${cpu}% RAM ${mem_percent}%"
-    print_fit_line "$width" "DSK ${disk_percent}%"
+    print_fit_line "$width" "CPU ${METRIC_CPU}% RAM ${METRIC_MEM_PERCENT}%"
+    print_fit_line "$width" "DSK ${METRIC_DISK_PERCENT}%"
     print_fit_line "$width" "q/r"
 }
 
@@ -918,10 +789,8 @@ render_wide_dashboard() {
     local -a left_panel
     local -a right_panel
 
-    cols=$(tput_cmd cols)
-    lines=$(tput_cmd lines)
-    [[ "$cols" =~ ^[0-9]+$ ]] || cols=${COLUMNS:-80}
-    [[ "$lines" =~ ^[0-9]+$ ]] || lines=24
+    cols=$TERM_COLS
+    lines=$TERM_LINES
 
     width="$cols"
     [ "$width" -gt 120 ] && width=120
@@ -960,14 +829,22 @@ render_wide_dashboard() {
     fi
 }
 
-render_dashboard() {
-    local cols
-    local lines
+read_dimensions() {
+    RESIZE_PENDING=0
+    TERM_COLS=$(tput_cmd cols)
+    TERM_LINES=$(tput_cmd lines)
+    [[ "$TERM_COLS" =~ ^[1-9][0-9]{0,5}$ ]] || TERM_COLS=${COLUMNS:-80}
+    [[ "$TERM_LINES" =~ ^[1-9][0-9]{0,5}$ ]] || TERM_LINES=${LINES:-24}
+    [[ "$TERM_COLS" =~ ^[1-9][0-9]{0,5}$ ]] || TERM_COLS=80
+    [[ "$TERM_LINES" =~ ^[1-9][0-9]{0,5}$ ]] || TERM_LINES=24
+}
 
-    cols=$(tput_cmd cols)
-    lines=$(tput_cmd lines)
-    [[ "$cols" =~ ^[0-9]+$ ]] || cols=${COLUMNS:-80}
-    [[ "$lines" =~ ^[0-9]+$ ]] || lines=${LINES:-24}
+render_dashboard() {
+    if [ "$LIVE_MODE" -eq 0 ] || [ "$RESIZE_PENDING" -eq 1 ]; then
+        read_dimensions
+    fi
+    collect_metrics
+    local cols=$TERM_COLS lines=$TERM_LINES
 
     if [ "$LIVE_MODE" -eq 1 ]; then
         tput_cmd cup 0 0
@@ -1007,19 +884,19 @@ handle_key() {
             ;;
         r|R)
             render_dashboard
-            NEXT_DRAW=$(($(date +%s) + REFRESH_INTERVAL))
+            NEXT_DRAW=$(( ${EPOCHSECONDS:-$SECONDS} + REFRESH_INTERVAL ))
             ;;
         +|=)
             if [ "$REFRESH_INTERVAL" -gt 1 ]; then
                 REFRESH_INTERVAL=$((REFRESH_INTERVAL - 1))
             fi
             render_dashboard
-            NEXT_DRAW=$(($(date +%s) + REFRESH_INTERVAL))
+            NEXT_DRAW=$(( ${EPOCHSECONDS:-$SECONDS} + REFRESH_INTERVAL ))
             ;;
         -|_)
             REFRESH_INTERVAL=$((REFRESH_INTERVAL + 1))
             render_dashboard
-            NEXT_DRAW=$(($(date +%s) + REFRESH_INTERVAL))
+            NEXT_DRAW=$(( ${EPOCHSECONDS:-$SECONDS} + REFRESH_INTERVAL ))
             ;;
     esac
 }
@@ -1027,10 +904,6 @@ handle_key() {
 run_live() {
     local key
     local now
-    local cols
-    local lines
-    local last_cols
-    local last_lines
 
     if [ ! -t 0 ] || [ ! -t 1 ]; then
         render_dashboard
@@ -1040,35 +913,23 @@ run_live() {
     LIVE_MODE=1
     trap cleanup EXIT
     trap 'exit 0' INT TERM
+    trap 'RESIZE_PENDING=1' WINCH
     setup_terminal
     render_dashboard
-    last_cols=$(tput_cmd cols)
-    last_lines=$(tput_cmd lines)
-    [[ "$last_cols" =~ ^[0-9]+$ ]] || last_cols=${COLUMNS:-80}
-    [[ "$last_lines" =~ ^[0-9]+$ ]] || last_lines=${LINES:-24}
-    NEXT_DRAW=$(($(date +%s) + REFRESH_INTERVAL))
+    NEXT_DRAW=$(( ${EPOCHSECONDS:-$SECONDS} + REFRESH_INTERVAL ))
 
     while true; do
         if read -rsn1 -t 0.1 key; then
             handle_key "$key"
         fi
 
-        cols=$(tput_cmd cols)
-        lines=$(tput_cmd lines)
-        [[ "$cols" =~ ^[0-9]+$ ]] || cols=${COLUMNS:-80}
-        [[ "$lines" =~ ^[0-9]+$ ]] || lines=${LINES:-24}
-
-        if [ "$cols" != "$last_cols" ] || [ "$lines" != "$last_lines" ]; then
-            render_dashboard
-            last_cols="$cols"
-            last_lines="$lines"
-            NEXT_DRAW=$(($(date +%s) + REFRESH_INTERVAL))
+        now=${EPOCHSECONDS:-$SECONDS}
+        if [ "$RESIZE_PENDING" -eq 1 ]; then
+            NEXT_DRAW=0
         fi
-
-        now=$(date +%s)
         if [ "$now" -ge "$NEXT_DRAW" ]; then
             render_dashboard
-            NEXT_DRAW=$((now + REFRESH_INTERVAL))
+            NEXT_DRAW=$(( ${EPOCHSECONDS:-$SECONDS} + REFRESH_INTERVAL ))
         fi
     done
 }

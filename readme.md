@@ -49,7 +49,6 @@ tools that are usually available by default:
 - `stty`
 - `tput`
 - `uptime`
-- `wc`
 - `whoami`
 
 Optional:
@@ -126,13 +125,15 @@ automatically:
 - `MICRO` keeps CPU, RAM, disk, temperature, load, swap, and short controls.
 - Very tiny terminals fall back to CPU, RAM, disk, and `q/r`.
 
-The live dashboard checks terminal dimensions during the event loop and redraws
-when the window size changes. Use `--wide` when you want the larger panel
-layout.
+The live dashboard reads terminal dimensions at startup and after a window resize
+signal (`SIGWINCH`). Idle ticks use Bash's built-in clock and spawn no subprocesses.
+Use `--wide` when you want the larger panel layout.
 
 CPU usage no longer waits for a blocking 1-second sample inside each refresh.
 Instead, the script stores the previous `/proc/stat` counters and calculates
 usage from the difference between dashboard refreshes.
+Each frame collects metrics once and shares the values across its panels. RAM and
+swap share one `free` call; process count and top processes share one `ps` snapshot.
 
 ## Notes
 
@@ -146,7 +147,7 @@ usage from the difference between dashboard refreshes.
 
 ## Development and project direction
 
-The current version is **1.2.0**. Runtime requirements are unchanged; Bats and
+The current version is **1.3.0**. Runtime requirements are unchanged; Bats and
 ShellCheck are development tools only. On Ubuntu, install them and run:
 
 ```bash
@@ -160,6 +161,8 @@ GitHub Actions runs these syntax, lint, and regression checks on pushes and pull
 requests. The tests cover formatting, CPU delta math, temperature/process parsing,
 CLI validation, layout routing boundaries, and snapshots of all five layouts.
 Snapshot tests check layout properties rather than changing live metric values.
+Additional checks cover consecutive CPU samples, one collection per source per
+frame, absent data, cached terminal dimensions, and refresh-key scheduling.
 The script can also be sourced to test functions without launching the dashboard.
 
 Project documentation is kept in Git:
@@ -170,8 +173,8 @@ Project documentation is kept in Git:
 - [Work log](doc/WORKLOG.md): implementation decisions and verification results.
 - [Changelog](CHANGELOG.md): user-facing release history.
 
-The next planned stage is **v1.3**: collect metrics once per frame and reduce idle
-subprocess overhead, with the v1.2 tests guarding existing behavior.
+The next planned stage is **v1.4**: optional configuration and layout/disk flags,
+while preserving the default dashboard behavior.
 
 ## License
 

@@ -2,13 +2,14 @@
 
 ## What this is
 
-PC Command Center is a **single-file Bash terminal dashboard** (`pc-command-center.sh`, ~1,070 lines) that shows live system stats for an Ubuntu/Linux machine: CPU, RAM, disk, temperature, load average, swap, process count, network interfaces/gateway, and the top processes by CPU.
+PC Command Center is a **single-file Bash terminal dashboard** (`pc-command-center.sh`) that shows live system stats for an Ubuntu/Linux machine: CPU, RAM, disk, temperature, load average, swap, process count, network interfaces/gateway, and the top processes by CPU.
 
 Its defining constraint — visible throughout the git history — is that it must be *glanceable in a quarter-screen terminal on a 1920×1080 display*. It is built for a desktop user who keeps a small terminal tile open in a corner, not for server fleets or background monitoring. Compared to `htop`/`btop`, its value is: zero installation (every dependency ships with Ubuntu), a layout that stays readable down to absurdly small windows, and a `--once` mode for scripts and quick checks.
 
 There is no build system or package manifest. Runtime code remains one executable
 script. Version 1.2 adds a Bats test suite, a ShellCheck/CI workflow, an MIT license,
-and version-controlled project documentation. See `readme.md` for development
+and version-controlled project documentation. Version 1.3 collects metrics once per
+frame and removes idle subprocess churn. See `readme.md` for development
 commands and `WORKLOG.md` for verification.
 
 ## Tech stack and why
@@ -32,9 +33,9 @@ Everything lives in one file, but it is cleanly layered — functions appear in 
                        └──────────────┬───────────────────────────┘
                                       │ raw text
                        ┌──────────────▼───────────────────────────┐
-   collectors          │ get_cpu_usage  get_memory_info/percent   │  one get_* per
-                       │ get_disk_info  get_load_*  get_swap_*    │  metric, value
-                       │ get_temperature  get_process_count …     │  via stdout
+   collection          │ collect_metrics in the parent shell     │  once per
+                       │ get_cpu_usage · get_temperature         │  frame into
+                       │ free · df · ps · ip · uptime             │  METRIC_*
                        └──────────────┬───────────────────────────┘
                                       │ numbers & strings
                        ┌──────────────▼───────────────────────────┐
@@ -47,8 +48,8 @@ Everything lives in one file, but it is cleanly layered — functions appear in 
    layout renderers    │ render_wide_dashboard      (--wide)      │  picked by
                        │ render_compact_dashboard   (≥60×20)      │  measured
                        │ render_mini_dashboard      (≥45×12)      │  cols×lines
-                       │ render_micro_dashboard     (≥36×8)       │  every frame
-                       │ render_tiny_fallback       (anything)    │
+                       │ render_micro_dashboard     (≥36×8)       │  at startup/
+                       │ render_tiny_fallback       (anything)    │  resize
                        └──────────────┬───────────────────────────┘
                                       │ routed by render_dashboard
                        ┌──────────────▼───────────────────────────┐
@@ -64,24 +65,26 @@ Data flows one way: kernel/CLI → collectors → formatters → a renderer → 
 
 ## Key design decisions
 
-1. **Non-blocking CPU sampling.** CPU% is computed from the delta between the previous and current `/proc/stat` counters (`get_cpu_usage`) instead of the classic "sleep 1 between two reads". The intended sample window is the refresh interval. Current renderers call the collector through command substitution, which loses its state updates: subsequent frames compare against startup counters (gap 13, scheduled for v1.3). The git history shows this replaced an earlier blocking approach. Since v1.1, startup waits 0.25s after priming the counters before the first render. This improves the first sample but is still a short sampling window.
+1. **Non-blocking CPU sampling.** CPU% is computed from the delta between the previous and current `/proc/stat` counters (`get_cpu_usage`) instead of the classic "sleep 1 between two reads". The intended sample window is the refresh interval. Since v1.3, `collect_metrics` calls the CPU collector directly in the parent shell, so each frame advances the baseline (gap 13 resolved). Renderers consume `METRIC_CPU`. The git history shows this replaced an earlier blocking approach. Since v1.1, startup waits 0.25s after priming the counters before the first render. This improves the first sample but is still a short sampling window.
 
 2. **Flicker-free in-place repaint.** Live mode enters the alternate screen (`smcup`), hides the cursor, and each frame moves to `cup 0 0`, redraws, then clears the remainder with `ed` — it never clears the whole screen. This is the repo's core UX contract (commit `9d82370` exists specifically for this).
 
 3. **An ANSI-aware layout layer.** Colored text breaks `printf '%-20s'` padding because escape codes count as characters. The script solves this properly: `strip_ansi`/`visible_length`/`pad_ansi`/`center_ansi` compute *visible* width and pad/truncate accordingly (truncation appends `~`). Every panel border lines up because every line passes through this layer.
 
-4. **Responsive layout tiers, measured every frame.** `render_dashboard` re-reads terminal dimensions and routes to compact/mini/micro/tiny. The live loop also polls dimensions every 0.1s and re-renders on change — resize handling without a `SIGWINCH` trap. `--wide` opts out of the tiers entirely and uses the bordered two-column panel layout.
+4. **Responsive layout tiers, measured on resize.** `read_dimensions` fetches and validates dimensions at startup and when the `SIGWINCH` trap sets `RESIZE_PENDING`. `render_dashboard` uses the cached size to route to compact/mini/micro/tiny. One-shot renders read dimensions each time. `--wide` uses the same dimensions for its bordered two-column panel layout.
 
-5. **One polling loop for everything.** `run_live` uses `read -rsn1 -t 0.1` as a combined 100ms sleep + keyboard reader, then checks resize and whether `NEXT_DRAW` has arrived. Simple and signal-free, at the cost of ~10 subprocess spawns per second while idle (`tput cols`/`lines`, `date`).
+5. **No subprocesses while idle.** `run_live` uses `read -rsn1 -t 0.1` as a combined 100ms sleep + keyboard reader, then checks the resize flag and whether `NEXT_DRAW` has arrived. Scheduling uses `$EPOCHSECONDS`, with `$SECONDS` as the Bash 4 fallback. Terminal queries and the displayed timestamp are collected only when needed for a frame.
 
-6. **Degrade, never crash.** `tput_cmd` swallows errors; every optional command is `command -v`-guarded; missing data renders as `Not available`/`N/A`; a zero-swap system, a missing sensor, or a dumb terminal all produce a working dashboard. There is deliberately no `set -e`/`set -u` — resilience is hand-rolled with defaults and `|| true`.
+6. **One snapshot per frame.** `collect_metrics` reads `/proc/stat` and `/proc/loadavg` once, parses memory and swap from one `free -b` call, and shares one `df` result across disk fields. Process count and all process views share one sorted `ps` snapshot. One `ip -batch` invocation queries IPv4 addresses and the default route. Uptime, identity, timestamp, and temperature are also collected once. Percentages and missing-temperature labels are normalized before rendering.
+
+7. **Degrade, never crash.** `tput_cmd` swallows errors; every optional command is `command -v`-guarded; missing data renders as `Not available`/`N/A`; a zero-swap system, a missing sensor, or a dumb terminal all produce a working dashboard. There is deliberately no `set -e`/`set -u` — resilience is hand-rolled with defaults and `|| true`.
 
 ## Critical paths (change with care)
 
 - **`pad_ansi` / `visible_length` / `strip_ansi`** — every rendered line passes through these. A width-math bug breaks every layout at once. Note: they count *characters*, not display cells, so the UI must stay ASCII (an emoji or CJK char would misalign every border).
 - **`setup_terminal` / `cleanup` pairing** — `cleanup` restores `stty` state and leaves the alternate screen on EXIT. Break this pairing and the user's terminal is left echo-less and cursor-less.
 - **`render_dashboard` routing thresholds** — the 60×20 / 45×12 / 36×8 breakpoints define the product's responsive behavior; readme.md documents them.
-- **`get_cpu_usage` state (`PREV_CPU_*`)** — the only sampled-over-time metric; call order matters (`init_cpu_sample` must run before the first render).
+- **`collect_metrics` / `get_cpu_usage` state (`PREV_CPU_*`)** — the only sampled-over-time metric; call order matters (`init_cpu_sample` must run before the first render).
 - **`tput_cmd`** — the terminal-capability chokepoint. All cursor/color operations must go through it.
 
 **Safe to change casually:** panel row content and ordering, warn/crit color thresholds (the `60 85` / `75 90` style arguments), labels, the process-list row limits, and anything in `readme.md`.

@@ -13,12 +13,12 @@ to that baseline.
 | 1, 2, 4, 10 | Fixed in v1.1 (`aff1799`); parsing regressions covered by v1.2 tests. |
 | 3 | v1.2 adds Bats regression tests and a ShellCheck/GitHub Actions workflow. Hosted CI awaits a push. |
 | 5 | Open: process CPU is still a lifetime average; interval sampling planned for v2.0. |
-| 6, 7 | Open: idle subprocess churn and repeated collection; next work is v1.3. |
+| 6, 7 | Addressed in v1.3: one collection per source per frame, shared process formatting, and zero idle subprocesses in a two-second PTY sample. |
 | 8 | Addressed in v1.2 with an MIT license. |
-| 9 | Open: temperature source selection and display normalization. |
+| 9 | Open: temperature source selection and unit formatting. v1.3 centralizes absent-temperature display handling while preserving existing labels. |
 | 11 | Interval overflow fixed in v1.1; deliberate shell-option and SIGKILL limitations remain documented. |
-| 13 | Newly verified during v1.2: CPU collector state is lost through command substitution; address in v1.3. |
-| 12 | v1.1 declared missing globals, removed dead assignment and duplicate cursor movement. Repeated dimensions/uptime collection and hand-synced help remain. |
+| 13 | Fixed in v1.3: parent-shell collection advances CPU baselines; consecutive rendered frames are regression-tested. |
+| 12 | v1.1 addressed globals/dead code/cursor movement; v1.3 shares dimensions and uptime collection. Help remains hand-synced. |
 
 See [WORKLOG.md](WORKLOG.md) for current verification and limitations.
 
@@ -145,6 +145,6 @@ A synthetic collector returning idle=160/total=300 with previous=100/200 produce
 them (covered by the v1.2 CPU math test). This distinction is not covered by the
 headless layout checks.
 
-**Next fix:** v1.3 should collect CPU in the parent shell, store its value in the
-metric globals, and add a regression proving consecutive frames advance the
-baseline. No telemetry behavior change was bundled into v1.2.
+**Resolved in v1.3:** `collect_metrics` calls CPU collection in the parent shell
+and stores its value in `METRIC_CPU`. A regression renders consecutive frames
+and verifies both the reported usage and advancing baseline counters.
