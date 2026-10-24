@@ -1,6 +1,9 @@
 # Local Codex/session files
 .codex
 
+# Local project documentation
+/doc/
+
 # Environment files
 .env
 .env.*

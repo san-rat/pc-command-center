@@ -2,7 +2,7 @@
 
 Single-file Bash TUI for Ubuntu/Linux. Runtime code is in
 `pc-command-center.sh`; current version is 1.3.0. No build system or new runtime
-dependencies. Project docs in `doc/` are version controlled.
+dependencies. Project notes in `doc/` are local and ignored by Git.
 
 ## Commands
 

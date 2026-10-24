@@ -165,13 +165,8 @@ Additional checks cover consecutive CPU samples, one collection per source per
 frame, absent data, cached terminal dimensions, and refresh-key scheduling.
 The script can also be sourced to test functions without launching the dashboard.
 
-Project documentation is kept in Git:
-
-- [Project overview](doc/PROJECT.md): architecture and design constraints.
-- [Roadmap](doc/ROADMAP.md): completed stages, future specs, and acceptance criteria.
-- [Known gaps](doc/GAPS.md): original audit with current resolution status.
-- [Work log](doc/WORKLOG.md): implementation decisions and verification results.
-- [Changelog](CHANGELOG.md): user-facing release history.
+Project planning notes are kept locally in the ignored `doc/` directory.
+See the [changelog](CHANGELOG.md) for user-facing release history.
 
 The next planned stage is **v1.4**: optional configuration and layout/disk flags,
 while preserving the default dashboard behavior.
