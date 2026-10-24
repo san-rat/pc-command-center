@@ -3,7 +3,7 @@
 # PC Command Center
 # A lightweight terminal dashboard for Ubuntu/Linux systems.
 
-VERSION="1.4.0"
+VERSION="2.0.0"
 REFRESH_INTERVAL=5
 ENABLE_COLOR=1
 ONCE=0
@@ -27,8 +27,15 @@ TERMINAL_READY=0
 STTY_STATE=""
 PREV_CPU_IDLE=0
 PREV_CPU_TOTAL=0
+CPU_DIFF_TOTAL=0
+CPU_COUNT=1
 CPU_IDLE=0
 CPU_TOTAL=0
+CPU_CORE_TOTALS=()
+CPU_CORE_IDLES=()
+PREV_CORE_TOTALS=()
+PREV_CORE_IDLES=()
+METRIC_CORE_CPUS=()
 NEXT_DRAW=0
 RESIZE_PENDING=1
 TERM_COLS=80
@@ -60,6 +67,17 @@ METRIC_UPTIME=""
 METRIC_HOST=""
 METRIC_USER=""
 METRIC_TIME=""
+METRIC_DEFAULT_IFACE=""
+METRIC_NET_INTERFACE=""
+METRIC_NET_RX_RATE=N/A
+METRIC_NET_TX_RATE=N/A
+PREV_NET_INTERFACE=""
+PREV_NET_RX=0
+PREV_NET_TX=0
+PREV_NET_TIME=0
+METRIC_PROCESS_CPU_MODE=avg
+METRIC_BATTERY=""
+declare -A PREV_PROC_TICKS=()
 
 RESET=""
 BOLD=""
@@ -86,6 +104,11 @@ Options:
   --disk PATH         Monitor the filesystem containing PATH. Default: /
   --version           Show the version and exit
   --help              Show this help message
+
+Live telemetry:
+  Network RX/TX rates use byte-counter deltas for the selected/default route interface.
+  Live process CPU uses interval deltas; --once labels ps lifetime averages as AVG.
+  Battery and per-core CPU readings appear when hardware data is available (wide view).
 
 Configuration:
   ~/.config/pc-command-center.conf (or $XDG_CONFIG_HOME/pc-command-center.conf)
@@ -391,27 +414,42 @@ bar() {
 }
 
 read_cpu_times() {
-    local user nice system idle iowait irq softirq steal
+    local line name user nice system idle iowait irq softirq steal total
 
-    read -r _ user nice system idle iowait irq softirq steal _ < /proc/stat
-    CPU_IDLE=$((idle + iowait))
-    CPU_TOTAL=$((user + nice + system + idle + iowait + irq + softirq + steal))
+    CPU_CORE_TOTALS=()
+    CPU_CORE_IDLES=()
+    while IFS= read -r line; do
+        read -r name user nice system idle iowait irq softirq steal _ <<< "$line"
+        [[ "$name" == cpu* ]] || break
+        total=$((user + nice + system + idle + iowait + irq + softirq + steal))
+        if [ "$name" = cpu ]; then
+            CPU_IDLE=$((idle + iowait))
+            CPU_TOTAL=$total
+        elif [[ "$name" =~ ^cpu[0-9]+$ ]]; then
+            CPU_CORE_TOTALS+=("$total")
+            CPU_CORE_IDLES+=("$((idle + iowait))")
+        fi
+    done < /proc/stat
 }
 
 init_cpu_sample() {
     read_cpu_times
     PREV_CPU_IDLE=$CPU_IDLE
     PREV_CPU_TOTAL=$CPU_TOTAL
+    PREV_CORE_TOTALS=("${CPU_CORE_TOTALS[@]}")
+    PREV_CORE_IDLES=("${CPU_CORE_IDLES[@]}")
 }
 
 get_cpu_usage() {
     local diff_idle
     local diff_total
+    local index core_total core_idle core_diff core_idle_diff
     local usage=0
 
     read_cpu_times
     diff_idle=$((CPU_IDLE - PREV_CPU_IDLE))
     diff_total=$((CPU_TOTAL - PREV_CPU_TOTAL))
+    CPU_DIFF_TOTAL=$diff_total
 
     if [ "$diff_total" -gt 0 ]; then
         usage=$((100 * (diff_total - diff_idle) / diff_total))
@@ -420,7 +458,166 @@ get_cpu_usage() {
     PREV_CPU_IDLE=$CPU_IDLE
     PREV_CPU_TOTAL=$CPU_TOTAL
     METRIC_CPU=$usage
+    METRIC_CORE_CPUS=()
+    for ((index = 0; index < ${#CPU_CORE_TOTALS[@]}; index++)); do
+        core_total=${CPU_CORE_TOTALS[$index]}
+        core_idle=${CPU_CORE_IDLES[$index]}
+        core_diff=$((core_total - ${PREV_CORE_TOTALS[$index]:-$core_total}))
+        core_idle_diff=$((core_idle - ${PREV_CORE_IDLES[$index]:-$core_idle}))
+        if [ "$core_diff" -gt 0 ]; then
+            METRIC_CORE_CPUS+=("$((100 * (core_diff - core_idle_diff) / core_diff))")
+        else
+            METRIC_CORE_CPUS+=(0)
+        fi
+    done
+    PREV_CORE_TOTALS=("${CPU_CORE_TOTALS[@]}")
+    PREV_CORE_IDLES=("${CPU_CORE_IDLES[@]}")
     printf '%s' "$usage"
+}
+
+read_network_counters() {
+    local interface="$1" line name rx tx
+
+    while IFS= read -r line; do
+        name=${line%%:*}
+        name=${name//[[:space:]]/}
+        read -r rx _ _ _ _ _ _ _ _ tx _ <<< "${line#*:}"
+        if [ "$name" = "$interface" ] && [[ "$rx" =~ ^[0-9]+$ && "$tx" =~ ^[0-9]+$ ]]; then
+            printf '%s %s\n' "$rx" "$tx"
+            return 0
+        fi
+    done < /proc/net/dev
+    return 1
+}
+
+format_network_rate() {
+    local bytes="$1" scale=1 unit=0 scaled
+    local -a units=(B/s KiB/s MiB/s GiB/s)
+
+    while [ "$bytes" -ge $((scale * 1024)) ] && [ "$unit" -lt 3 ]; do
+        scale=$((scale * 1024))
+        unit=$((unit + 1))
+    done
+    if [ "$unit" -eq 0 ]; then
+        printf '%s%s' "$bytes" "${units[$unit]}"
+    else
+        scaled=$((bytes * 10 / scale))
+        printf '%d.%d%s' "$((scaled / 10))" "$((scaled % 10))" "${units[$unit]}"
+    fi
+}
+
+collect_network_metrics() {
+    local now rx tx elapsed interface
+
+    interface="$NETWORK_INTERFACE"
+    if [ -z "$interface" ]; then
+        interface="$METRIC_DEFAULT_IFACE"
+        [ -n "$interface" ] || interface="${METRIC_INTERFACES[0]%% *}"
+        interface=${interface%%@*}
+    fi
+    METRIC_NET_INTERFACE="$interface"
+    METRIC_NET_RX_RATE=N/A
+    METRIC_NET_TX_RATE=N/A
+    if [ -z "$interface" ] || ! read -r rx tx < <(read_network_counters "$interface"); then
+        PREV_NET_INTERFACE=""
+        return
+    fi
+
+    now=${EPOCHSECONDS:-$SECONDS}
+    elapsed=$((now - PREV_NET_TIME))
+    if [ "$interface" = "$PREV_NET_INTERFACE" ] && [ "$elapsed" -gt 0 ] &&
+        [ "$rx" -ge "$PREV_NET_RX" ] && [ "$tx" -ge "$PREV_NET_TX" ]; then
+        METRIC_NET_RX_RATE=$(format_network_rate "$(((rx - PREV_NET_RX) / elapsed))")
+        METRIC_NET_TX_RATE=$(format_network_rate "$(((tx - PREV_NET_TX) / elapsed))")
+    fi
+    PREV_NET_INTERFACE=$interface
+    PREV_NET_RX=$rx
+    PREV_NET_TX=$tx
+    PREV_NET_TIME=$now
+}
+
+read_battery_metrics() {
+    local battery type capacity status
+
+    for battery in /sys/class/power_supply/BAT*; do
+        [ -d "$battery" ] || continue
+        IFS= read -r type < "$battery/type" 2>/dev/null || continue
+        [ "$type" = Battery ] || continue
+        IFS= read -r capacity < "$battery/capacity" 2>/dev/null || continue
+        [[ "$capacity" =~ ^[0-9]{1,3}$ ]] || continue
+        [ "$capacity" -le 100 ] || continue
+        IFS= read -r status < "$battery/status" 2>/dev/null || status=Unknown
+        printf '%s%% %s' "$capacity" "${status,,}"
+        return
+    done
+    return 0
+}
+
+collect_live_processes() {
+    local pid line previous delta percent mem name
+    local -A current_ticks=() percentages=()
+    local -a process_lines=()
+    local sorted_processes
+
+    while read -r pid ticks; do
+        [[ "$pid" =~ ^[0-9]+$ && "$ticks" =~ ^[0-9]+$ ]] || continue
+        current_ticks[$pid]=$ticks
+    done < <(read_process_ticks)
+
+    if [ "$CPU_DIFF_TOTAL" -gt 0 ]; then
+        for pid in "${!current_ticks[@]}"; do
+            previous=${PREV_PROC_TICKS[$pid]:-${current_ticks[$pid]}}
+            delta=$((current_ticks[$pid] - previous))
+            [ "$delta" -lt 0 ] && delta=0
+            percent=$((delta * CPU_COUNT * 1000 / CPU_DIFF_TOTAL))
+            printf -v percent '%d.%d' "$((percent / 10))" "$((percent % 10))"
+            percentages[$pid]=$percent
+        done
+    fi
+
+    for pid in "${!current_ticks[@]}"; do PREV_PROC_TICKS[$pid]=${current_ticks[$pid]}; done
+    for pid in "${!PREV_PROC_TICKS[@]}"; do
+        [ -n "${current_ticks[$pid]+present}" ] || unset 'PREV_PROC_TICKS[$pid]'
+    done
+
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*([0-9]+)[[:space:]]+(.*)[[:space:]]+([0-9.]+)[[:space:]]+([0-9.]+)$ ]] || continue
+        pid=${BASH_REMATCH[1]}
+        [ "$pid" = "$$" ] && continue
+        name=${BASH_REMATCH[2]}
+        mem=${BASH_REMATCH[4]}
+        percent=${percentages[$pid]:-0.0}
+        process_lines+=("$percent $pid $name $mem")
+    done < <(ps -eo pid=,comm=,%cpu=,%mem= 2>/dev/null)
+    sorted_processes=$(printf '%s\n' "${process_lines[@]}" | sort -k1,1nr)
+    METRIC_PROCESSES=""
+    while IFS= read -r line; do
+        [[ "$line" =~ ^([0-9]+\.[0-9]+)[[:space:]]+([0-9]+)[[:space:]]+(.*)[[:space:]]+([0-9.]+)$ ]] || continue
+        percent=${BASH_REMATCH[1]}
+        pid=${BASH_REMATCH[2]}
+        name=${BASH_REMATCH[3]}
+        mem=${BASH_REMATCH[4]}
+        METRIC_PROCESSES+="${METRIC_PROCESSES:+$'\n'}$pid $name $percent $mem"
+    done <<< "$sorted_processes"
+    METRIC_PROCESS_CPU_MODE=now
+}
+
+read_process_ticks() {
+    local path pid line rest
+    local -a fields
+
+    for path in /proc/[0-9]*/stat; do
+        [ -r "$path" ] || continue
+        pid=${path#/proc/}
+        pid=${pid%/stat}
+        [ "$pid" = "$$" ] && continue
+        IFS= read -r line < "$path" || continue
+        rest=${line##*) }
+        read -r -a fields <<< "$rest"
+        [ "${#fields[@]}" -ge 13 ] || continue
+        [[ "${fields[11]}" =~ ^[0-9]+$ && "${fields[12]}" =~ ^[0-9]+$ ]] || continue
+        printf '%s %s\n' "$pid" "$((fields[11] + fields[12]))"
+    done
 }
 
 collect_metrics() {
@@ -462,6 +659,7 @@ collect_metrics() {
     cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')
     [[ "$cores" =~ ^[0-9]+$ ]] || cores=1
     [ "$cores" -lt 1 ] && cores=1
+    CPU_COUNT=$cores
     METRIC_LOAD_PERCENT=$(awk -v load_one="$METRIC_LOAD_ONE" -v cores="$cores" 'BEGIN {printf "%d", load_one * 100 / cores}')
 
     METRIC_TEMP=$(get_temperature)
@@ -469,7 +667,12 @@ collect_metrics() {
     METRIC_TEMP_SHORT=$METRIC_TEMP
     [ "$METRIC_TEMP" = "Not available" ] && METRIC_TEMP_SHORT="N/A"
 
-    METRIC_PROCESSES=$(ps -eo pid=,comm=,%cpu=,%mem= --sort=-%cpu 2>/dev/null)
+    if [ "$LIVE_MODE" -eq 1 ]; then
+        collect_live_processes
+    else
+        METRIC_PROCESSES=$(ps -eo pid=,comm=,%cpu=,%mem= --sort=-%cpu 2>/dev/null)
+        METRIC_PROCESS_CPU_MODE=avg
+    fi
     METRIC_PROCESS_COUNT=0
     while IFS= read -r line; do
         [ -n "$line" ] && METRIC_PROCESS_COUNT=$((METRIC_PROCESS_COUNT + 1))
@@ -478,6 +681,7 @@ collect_metrics() {
     METRIC_INTERFACES=()
     METRIC_INTERFACE="No active IPv4"
     METRIC_GATEWAY=""
+    METRIC_DEFAULT_IFACE=""
     while read -r first second third fourth fifth _; do
         if [ "$first" = default ]; then
             case "$second" in
@@ -488,6 +692,7 @@ collect_metrics() {
             if [ -z "$METRIC_GATEWAY" ] &&
                 { [ -z "$NETWORK_INTERFACE" ] || [ "$route_interface" = "$NETWORK_INTERFACE" ]; }; then
                 METRIC_GATEWAY=$route_gateway
+                METRIC_DEFAULT_IFACE=$route_interface
             fi
         elif [[ "$first" =~ ^[0-9]+:$ ]] && [ "${#METRIC_INTERFACES[@]}" -lt 4 ] &&
             { [ -z "$NETWORK_INTERFACE" ] || [ "${second%%@*}" = "$NETWORK_INTERFACE" ]; }; then
@@ -495,6 +700,9 @@ collect_metrics() {
             METRIC_INTERFACES+=("$second  $fourth")
         fi
     done < <(ip -o -4 -batch - 2>/dev/null <<< $'address show up scope global\nroute show default')
+
+    collect_network_metrics
+    METRIC_BATTERY=$(read_battery_metrics) || METRIC_BATTERY=""
 
     METRIC_UPTIME=$(uptime -p)
     METRIC_HOST=$(hostname)
@@ -592,12 +800,18 @@ blank_line() {
 
 system_panel() {
     local width="$1"
+    local index core_color
     local -a rows
 
     rows+=("$(metric_line "CPU" "${METRIC_CPU}%" "$METRIC_CPU" "$CPU_WARN" "$CPU_CRIT")")
     rows+=("$(metric_line "RAM" "${METRIC_MEM_USED}/${METRIC_MEM_TOTAL} ${METRIC_MEM_PERCENT}%" "$METRIC_MEM_PERCENT" "$RAM_WARN" "$RAM_CRIT")")
     rows+=("$(metric_line "Disk" "${METRIC_DISK_USED}/${METRIC_DISK_TOTAL} ${METRIC_DISK_PERCENT}%" "$METRIC_DISK_PERCENT" "$DISK_WARN" "$DISK_CRIT")")
     rows+=("$(metric_line "Temp" "$METRIC_TEMP" "$METRIC_TEMP_PERCENT" "$TEMP_WARN" "$TEMP_CRIT")")
+    for ((index = 0; index < ${#METRIC_CORE_CPUS[@]}; index++)); do
+        core_color=$(status_color "${METRIC_CORE_CPUS[$index]}" "$CPU_WARN" "$CPU_CRIT")
+        rows+=("Core $index $(bar "${METRIC_CORE_CPUS[$index]}" 8 "$core_color") ${METRIC_CORE_CPUS[$index]}%")
+    done
+    [ -n "$METRIC_BATTERY" ] && rows+=("Battery   $METRIC_BATTERY")
     rows+=("")
     rows+=("Uptime     $METRIC_UPTIME")
 
@@ -621,6 +835,8 @@ network_panel() {
     rows+=("")
     rows+=("Gateway")
     rows+=("  ${METRIC_GATEWAY:-Not available}")
+    rows+=("")
+    rows+=("${METRIC_NET_INTERFACE:-Network} RX $METRIC_NET_RX_RATE  TX $METRIC_NET_TX_RATE")
 
     panel "$width" "Network" "${rows[@]}"
 }
@@ -636,7 +852,7 @@ process_panel() {
     [ "$name_width" -lt 8 ] && name_width=8
     [ "$name_width" -gt 28 ] && name_width=28
 
-    rows+=("PID    COMMAND$(repeat_char " " "$((name_width - 7))")     CPU    MEM")
+    rows+=("PID    COMMAND$(repeat_char " " "$((name_width - 7))")     CPU${METRIC_PROCESS_CPU_MODE:+ }${METRIC_PROCESS_CPU_MODE^^}    MEM")
 
     while IFS= read -r line; do
         rows+=("$line")
@@ -719,9 +935,9 @@ compact_network_rows() {
     local row_limit="$2"
 
     if [ "$row_limit" -le 1 ]; then
-        print_fit_line "$width" "${BLUE}NET${RESET} $METRIC_INTERFACE | GW ${METRIC_GATEWAY:-N/A}"
+        print_fit_line "$width" "${BLUE}NET${RESET} $METRIC_INTERFACE RX $METRIC_NET_RX_RATE TX $METRIC_NET_TX_RATE | GW ${METRIC_GATEWAY:-N/A}"
     else
-        print_fit_line "$width" "${BLUE}NET${RESET} $METRIC_INTERFACE"
+        print_fit_line "$width" "${BLUE}NET${RESET} $METRIC_INTERFACE RX $METRIC_NET_RX_RATE TX $METRIC_NET_TX_RATE"
         print_fit_line "$width" "${BLUE}GW ${RESET} ${METRIC_GATEWAY:-N/A}"
     fi
 }
@@ -736,7 +952,7 @@ compact_process_rows() {
     [ "$name_width" -gt 30 ] && name_width=30
 
     print_fit_line "$width" "${BLUE}TOP${RESET}"
-    print_fit_line "$width" "PID    COMMAND$(repeat_char " " "$((name_width - 7))")    CPU   MEM"
+    print_fit_line "$width" "PID    COMMAND$(repeat_char " " "$((name_width - 7))")    CPU${METRIC_PROCESS_CPU_MODE:+ }${METRIC_PROCESS_CPU_MODE^^}   MEM"
 
     while IFS= read -r line; do
         print_fit_line "$width" "$line"
@@ -819,7 +1035,7 @@ render_mini_dashboard() {
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
     if [ "$lines" -ge 12 ]; then
-        print_fit_line "$width" "TOP $(top_process_summary "$((width - 16))")"
+        print_fit_line "$width" "TOP ${METRIC_PROCESS_CPU_MODE^^} $(top_process_summary "$((width - 20))")"
     fi
 
     printf '%s\n' "$(repeat_char "-" "$width")"
