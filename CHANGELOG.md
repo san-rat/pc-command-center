@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.0.0 — 2026-10-24
+
+- Add source install and uninstall targets for `pcc` and a committed manual page.
+- Add Debian package creation and tag-triggered GitHub Release automation.
+- Document package dependencies, installation, removal, and release steps.
+
 ## 2.1.0 — 2026-10-24
 
 - Add live CPU/memory process sorting, pause/resume, a dismissible help overlay, and network-interface cycling.
