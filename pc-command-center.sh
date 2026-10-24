@@ -3,11 +3,25 @@
 # PC Command Center
 # A lightweight terminal dashboard for Ubuntu/Linux systems.
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 REFRESH_INTERVAL=5
 ENABLE_COLOR=1
 ONCE=0
-WIDE_MODE=0
+LAYOUT=auto
+DISK_PATH=/
+NETWORK_INTERFACE=""
+CPU_WARN=60
+CPU_CRIT=85
+RAM_WARN=75
+RAM_CRIT=90
+DISK_WARN=75
+DISK_CRIT=90
+TEMP_WARN=70
+TEMP_CRIT=85
+LOAD_WARN=70
+LOAD_CRIT=100
+SWAP_WARN=50
+SWAP_CRIT=80
 LIVE_MODE=0
 TERMINAL_READY=0
 STTY_STATE=""
@@ -30,6 +44,7 @@ METRIC_DISK_USED=""
 METRIC_DISK_TOTAL=""
 METRIC_DISK_AVAILABLE=""
 METRIC_DISK_PERCENT=0
+METRIC_DISK_LABEL=ROOT
 METRIC_TEMP="Not available"
 METRIC_TEMP_SHORT="N/A"
 METRIC_TEMP_PERCENT=0
@@ -66,9 +81,22 @@ Options:
   --interval SECONDS  Set the refresh interval (1-999999). Default: 5
   --no-color          Disable terminal colors
   --once              Print one dashboard snapshot and exit
-  --wide              Use the roomier wide dashboard layout
+  --layout LAYOUT     Force compact, mini, micro, tiny, or wide layout
+  --wide              Alias for --layout wide
+  --disk PATH         Monitor the filesystem containing PATH. Default: /
   --version           Show the version and exit
   --help              Show this help message
+
+Configuration:
+  ~/.config/pc-command-center.conf (or $XDG_CONFIG_HOME/pc-command-center.conf)
+  Defaults < config < CLI flags. Literal KEY=value entries; no shell expansion.
+  REFRESH_INTERVAL=1..999999, ENABLE_COLOR=0|1, DISK_PATH=directory,
+  NETWORK_INTERFACE=interface (empty for all), LAYOUT=auto|compact|mini|micro|tiny|wide.
+  CPU_WARN/CPU_CRIT=60/85, RAM_WARN/RAM_CRIT=75/90, DISK_WARN/DISK_CRIT=75/90,
+  TEMP_WARN/TEMP_CRIT=70/85 (Celsius), LOAD_WARN/LOAD_CRIT=70/100,
+  SWAP_WARN/SWAP_CRIT=50/80. These pairs show defaults; set each key separately.
+  Thresholds: CPU/RAM/DISK/SWAP 0..100, TEMP 0..999, LOAD 0..999999; WARN < CRIT.
+  Invalid entries warn once and are ignored; invalid threshold pairs are ignored.
 
 Live controls:
   q     Quit
@@ -84,6 +112,81 @@ die() {
     exit 1
 }
 
+valid_number() {
+    [[ "$1" =~ ^[0-9]{1,6}$ ]] && ((10#$1 >= $2 && 10#$1 <= $3))
+}
+
+valid_setting() {
+    local key="$1" value="$2"
+
+    case "$key" in
+        REFRESH_INTERVAL) valid_number "$value" 1 999999 ;;
+        ENABLE_COLOR) [[ "$value" == 0 || "$value" == 1 ]] ;;
+        CPU_WARN|CPU_CRIT|RAM_WARN|RAM_CRIT|DISK_WARN|DISK_CRIT|SWAP_WARN|SWAP_CRIT)
+            valid_number "$value" 0 100 ;;
+        TEMP_WARN|TEMP_CRIT) valid_number "$value" 0 999 ;;
+        LOAD_WARN|LOAD_CRIT) valid_number "$value" 0 999999 ;;
+        DISK_PATH) [ -d "$value" ] ;;
+        NETWORK_INTERFACE)
+            [[ -z "$value" || ( "$value" =~ ^[a-zA-Z0-9_.:-]{1,15}$ && -e "/sys/class/net/$value" && "$value" != . && "$value" != .. ) ]] ;;
+        LAYOUT)
+            case "$value" in auto|compact|mini|micro|tiny|wide) return 0 ;; *) return 1 ;; esac ;;
+        *) return 1 ;;
+    esac
+}
+
+read_config() {
+    local file="${XDG_CONFIG_HOME:-$HOME/.config}/pc-command-center.conf"
+    local line key value metric warn_key crit_key warn crit
+    local line_number=0
+    local -A thresholds=()
+
+    [ -e "$file" ] || return 0
+    if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+        printf 'Warning: cannot read config %s; ignored\n' "$file" >&2
+        return 0
+    fi
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line_number=$((line_number + 1))
+        line=${line#"${line%%[![:space:]]*}"}
+        line=${line%"${line##*[![:space:]]}"}
+        [[ -z "$line" || "$line" == \#* ]] && continue
+        if ! [[ "$line" =~ ^([A-Z][A-Z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+            printf 'Warning: %s:%s: invalid config entry; ignored\n' "$file" "$line_number" >&2
+            continue
+        fi
+        key=${BASH_REMATCH[1]}
+        value=${BASH_REMATCH[2]}
+        if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then
+            value=${value:1:${#value}-2}
+        fi
+        if ! valid_setting "$key" "$value"; then
+            printf 'Warning: %s:%s: invalid %s; ignored\n' "$file" "$line_number" "$key" >&2
+            continue
+        fi
+        case "$key" in
+            *_WARN|*_CRIT) thresholds[$key]=$((10#$value)) ;;
+            REFRESH_INTERVAL) REFRESH_INTERVAL=$((10#$value)) ;;
+            *) printf -v "$key" '%s' "$value" ;;
+        esac
+    done < "$file"
+
+    # Validate complete pairs so their order in the file does not matter.
+    for metric in CPU RAM DISK TEMP LOAD SWAP; do
+        warn_key=${metric}_WARN
+        crit_key=${metric}_CRIT
+        warn=${thresholds[$warn_key]:-${!warn_key}}
+        crit=${thresholds[$crit_key]:-${!crit_key}}
+        if [ "$warn" -lt "$crit" ]; then
+            printf -v "$warn_key" '%s' "$warn"
+            printf -v "$crit_key" '%s' "$crit"
+        else
+            printf 'Warning: %s: invalid %s thresholds; pair ignored\n' "$file" "$metric" >&2
+        fi
+    done
+}
+
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -91,7 +194,7 @@ parse_args() {
                 [ "$#" -ge 2 ] || die "--interval requires a value"
                 [[ "$2" =~ ^[0-9]{1,6}$ ]] || die "--interval must be a positive integer (1-999999)"
                 [ "$2" -ge 1 ] || die "--interval must be at least 1"
-                REFRESH_INTERVAL="$2"
+                REFRESH_INTERVAL=$((10#$2))
                 shift 2
                 ;;
             --no-color)
@@ -103,8 +206,22 @@ parse_args() {
                 shift
                 ;;
             --wide)
-                WIDE_MODE=1
+                LAYOUT=wide
                 shift
+                ;;
+            --layout)
+                [ "$#" -ge 2 ] || die "--layout requires a value"
+                case "$2" in
+                    compact|mini|micro|tiny|wide) LAYOUT="$2" ;;
+                    *) die "--layout must be compact, mini, micro, tiny, or wide" ;;
+                esac
+                shift 2
+                ;;
+            --disk)
+                [ "$#" -ge 2 ] || die "--disk requires a value"
+                valid_setting DISK_PATH "$2" || die "--disk must be an existing directory"
+                DISK_PATH="$2"
+                shift 2
                 ;;
             --version)
                 printf 'PC Command Center %s\n' "$VERSION"
@@ -308,6 +425,7 @@ get_cpu_usage() {
 
 collect_metrics() {
     local cores load_five load_fifteen line first second third fourth fifth
+    local route_interface route_gateway
 
     # CPU counters must advance in the parent shell, not a command substitution.
     get_cpu_usage >/dev/null
@@ -332,10 +450,12 @@ collect_metrics() {
     )
 
     read -r METRIC_DISK_USED METRIC_DISK_TOTAL METRIC_DISK_AVAILABLE METRIC_DISK_PERCENT < <(
-        df -hP / 2>/dev/null | awk 'NR==2 {print $3, $2, $4, $5}'
+        df -hP -- "$DISK_PATH" 2>/dev/null | awk 'NR==2 {print $3, $2, $4, $5}'
     ) || true
     METRIC_DISK_PERCENT=${METRIC_DISK_PERCENT%\%}
     METRIC_DISK_PERCENT=${METRIC_DISK_PERCENT:-0}
+    METRIC_DISK_LABEL=ROOT
+    [ "$DISK_PATH" = / ] || METRIC_DISK_LABEL=DISK
 
     read -r METRIC_LOAD_ONE load_five load_fifteen _ < /proc/loadavg
     METRIC_LOAD="$METRIC_LOAD_ONE $load_five $load_fifteen"
@@ -359,9 +479,18 @@ collect_metrics() {
     METRIC_INTERFACE="No active IPv4"
     METRIC_GATEWAY=""
     while read -r first second third fourth fifth _; do
-        if [ "$first" = default ] && [ -z "$METRIC_GATEWAY" ]; then
-            METRIC_GATEWAY="$third via $fifth"
-        elif [[ "$first" =~ ^[0-9]+:$ ]] && [ "${#METRIC_INTERFACES[@]}" -lt 4 ]; then
+        if [ "$first" = default ]; then
+            case "$second" in
+                via) route_interface=$fifth; route_gateway="$third via $fifth" ;;
+                dev) route_interface=$third; route_gateway="dev $third" ;;
+                *) continue ;;
+            esac
+            if [ -z "$METRIC_GATEWAY" ] &&
+                { [ -z "$NETWORK_INTERFACE" ] || [ "$route_interface" = "$NETWORK_INTERFACE" ]; }; then
+                METRIC_GATEWAY=$route_gateway
+            fi
+        elif [[ "$first" =~ ^[0-9]+:$ ]] && [ "${#METRIC_INTERFACES[@]}" -lt 4 ] &&
+            { [ -z "$NETWORK_INTERFACE" ] || [ "${second%%@*}" = "$NETWORK_INTERFACE" ]; }; then
             [ "${#METRIC_INTERFACES[@]}" -eq 0 ] && METRIC_INTERFACE="$second $fourth"
             METRIC_INTERFACES+=("$second  $fourth")
         fi
@@ -465,10 +594,10 @@ system_panel() {
     local width="$1"
     local -a rows
 
-    rows+=("$(metric_line "CPU" "${METRIC_CPU}%" "$METRIC_CPU" 60 85)")
-    rows+=("$(metric_line "RAM" "${METRIC_MEM_USED}/${METRIC_MEM_TOTAL} ${METRIC_MEM_PERCENT}%" "$METRIC_MEM_PERCENT" 75 90)")
-    rows+=("$(metric_line "Disk" "${METRIC_DISK_USED}/${METRIC_DISK_TOTAL} ${METRIC_DISK_PERCENT}%" "$METRIC_DISK_PERCENT" 75 90)")
-    rows+=("$(metric_line "Temp" "$METRIC_TEMP" "$METRIC_TEMP_PERCENT" 70 85)")
+    rows+=("$(metric_line "CPU" "${METRIC_CPU}%" "$METRIC_CPU" "$CPU_WARN" "$CPU_CRIT")")
+    rows+=("$(metric_line "RAM" "${METRIC_MEM_USED}/${METRIC_MEM_TOTAL} ${METRIC_MEM_PERCENT}%" "$METRIC_MEM_PERCENT" "$RAM_WARN" "$RAM_CRIT")")
+    rows+=("$(metric_line "Disk" "${METRIC_DISK_USED}/${METRIC_DISK_TOTAL} ${METRIC_DISK_PERCENT}%" "$METRIC_DISK_PERCENT" "$DISK_WARN" "$DISK_CRIT")")
+    rows+=("$(metric_line "Temp" "$METRIC_TEMP" "$METRIC_TEMP_PERCENT" "$TEMP_WARN" "$TEMP_CRIT")")
     rows+=("")
     rows+=("Uptime     $METRIC_UPTIME")
 
@@ -555,12 +684,12 @@ compact_system_rows() {
     local half
 
     half=$(((width - 2) / 2))
-    left="$(compact_metric "CPU" "${METRIC_CPU}%" "$METRIC_CPU" 60 85 "$bar_width")"
-    right="$(compact_metric "RAM" "${METRIC_MEM_USED}/${METRIC_MEM_TOTAL} ${METRIC_MEM_PERCENT}%" "$METRIC_MEM_PERCENT" 75 90 "$bar_width")"
+    left="$(compact_metric "CPU" "${METRIC_CPU}%" "$METRIC_CPU" "$CPU_WARN" "$CPU_CRIT" "$bar_width")"
+    right="$(compact_metric "RAM" "${METRIC_MEM_USED}/${METRIC_MEM_TOTAL} ${METRIC_MEM_PERCENT}%" "$METRIC_MEM_PERCENT" "$RAM_WARN" "$RAM_CRIT" "$bar_width")"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
-    left="$(compact_metric "DSK" "${METRIC_DISK_USED}/${METRIC_DISK_TOTAL} ${METRIC_DISK_PERCENT}%" "$METRIC_DISK_PERCENT" 75 90 "$bar_width")"
-    right="$(compact_metric "TMP" "$METRIC_TEMP_SHORT" "$METRIC_TEMP_PERCENT" 70 85 "$bar_width")"
+    left="$(compact_metric "DSK" "${METRIC_DISK_USED}/${METRIC_DISK_TOTAL} ${METRIC_DISK_PERCENT}%" "$METRIC_DISK_PERCENT" "$DISK_WARN" "$DISK_CRIT" "$bar_width")"
+    right="$(compact_metric "TMP" "$METRIC_TEMP_SHORT" "$METRIC_TEMP_PERCENT" "$TEMP_WARN" "$TEMP_CRIT" "$bar_width")"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 }
 
@@ -572,8 +701,8 @@ compact_health_rows() {
     local right
     local half
 
-    load_color=$(status_color "$METRIC_LOAD_PERCENT" 70 100)
-    swap_color=$(status_color "$METRIC_SWAP_PERCENT" 50 80)
+    load_color=$(status_color "$METRIC_LOAD_PERCENT" "$LOAD_WARN" "$LOAD_CRIT")
+    swap_color=$(status_color "$METRIC_SWAP_PERCENT" "$SWAP_WARN" "$SWAP_CRIT")
 
     half=$(((width - 2) / 2))
     left="LOAD $(colorize "$load_color" "$METRIC_LOAD")"
@@ -581,7 +710,7 @@ compact_health_rows() {
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
     left="SWAP $(colorize "$swap_color" "${METRIC_SWAP_USED}/${METRIC_SWAP_TOTAL} ${METRIC_SWAP_PERCENT}%")"
-    right="ROOT ${METRIC_DISK_AVAILABLE:-N/A} free"
+    right="$METRIC_DISK_LABEL ${METRIC_DISK_AVAILABLE:-N/A} free"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 }
 
@@ -663,11 +792,11 @@ render_mini_dashboard() {
     half=$(((width - 2) / 2))
     [ "$half" -lt 1 ] && half=1
 
-    cpu_color=$(status_color "$METRIC_CPU" 60 85)
-    mem_color=$(status_color "$METRIC_MEM_PERCENT" 75 90)
-    disk_color=$(status_color "$METRIC_DISK_PERCENT" 75 90)
-    temp_color=$(status_color "$METRIC_TEMP_PERCENT" 70 85)
-    swap_color=$(status_color "$METRIC_SWAP_PERCENT" 50 80)
+    cpu_color=$(status_color "$METRIC_CPU" "$CPU_WARN" "$CPU_CRIT")
+    mem_color=$(status_color "$METRIC_MEM_PERCENT" "$RAM_WARN" "$RAM_CRIT")
+    disk_color=$(status_color "$METRIC_DISK_PERCENT" "$DISK_WARN" "$DISK_CRIT")
+    temp_color=$(status_color "$METRIC_TEMP_PERCENT" "$TEMP_WARN" "$TEMP_CRIT")
+    swap_color=$(status_color "$METRIC_SWAP_PERCENT" "$SWAP_WARN" "$SWAP_CRIT")
 
     print_fit_line "$width" "${BOLD}${CYAN}PCC MINI${RESET} | $METRIC_HOST | ${REFRESH_INTERVAL}s"
     print_fit_line "$width" "${METRIC_TIME#* } | $METRIC_UPTIME"
@@ -686,7 +815,7 @@ render_mini_dashboard() {
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
     left="SWAP $(colorize "$swap_color" "${METRIC_SWAP_PERCENT}%")"
-    right="ROOT ${METRIC_DISK_AVAILABLE:-N/A}"
+    right="$METRIC_DISK_LABEL ${METRIC_DISK_AVAILABLE:-N/A}"
     printf '%s  %s\n' "$(pad_ansi "$left" "$half")" "$(pad_ansi "$right" "$((width - half - 2))")"
 
     if [ "$lines" -ge 12 ]; then
@@ -709,17 +838,17 @@ render_micro_dashboard() {
     [ "$width" -gt 44 ] && width=44
     [ "$width" -lt 1 ] && width=1
 
-    cpu_color=$(status_color "$METRIC_CPU" 60 85)
-    mem_color=$(status_color "$METRIC_MEM_PERCENT" 75 90)
-    disk_color=$(status_color "$METRIC_DISK_PERCENT" 75 90)
-    temp_color=$(status_color "$METRIC_TEMP_PERCENT" 70 85)
+    cpu_color=$(status_color "$METRIC_CPU" "$CPU_WARN" "$CPU_CRIT")
+    mem_color=$(status_color "$METRIC_MEM_PERCENT" "$RAM_WARN" "$RAM_CRIT")
+    disk_color=$(status_color "$METRIC_DISK_PERCENT" "$DISK_WARN" "$DISK_CRIT")
+    temp_color=$(status_color "$METRIC_TEMP_PERCENT" "$TEMP_WARN" "$TEMP_CRIT")
 
     print_fit_line "$width" "${BOLD}${CYAN}PCC MICRO${RESET} | ${REFRESH_INTERVAL}s"
     printf '%s\n' "$(repeat_char "-" "$width")"
     print_fit_line "$width" "CPU $(colorize "$cpu_color" "${METRIC_CPU}%") | RAM $(colorize "$mem_color" "${METRIC_MEM_PERCENT}%")"
     print_fit_line "$width" "DSK $(colorize "$disk_color" "${METRIC_DISK_PERCENT}%") | TMP $(colorize "$temp_color" "$METRIC_TEMP_SHORT")"
     print_fit_line "$width" "LOAD $METRIC_LOAD_ONE | SWAP ${METRIC_SWAP_PERCENT}%"
-    [ "$lines" -ge 10 ] && print_fit_line "$width" "ROOT ${METRIC_DISK_AVAILABLE:-N/A} free"
+    [ "$lines" -ge 10 ] && print_fit_line "$width" "$METRIC_DISK_LABEL ${METRIC_DISK_AVAILABLE:-N/A} free"
     printf '%s\n' "$(repeat_char "-" "$width")"
     print_fit_line "$width" "q quit | r refresh"
 }
@@ -844,34 +973,32 @@ render_dashboard() {
         read_dimensions
     fi
     collect_metrics
-    local cols=$TERM_COLS lines=$TERM_LINES
+    local cols=$TERM_COLS lines=$TERM_LINES layout=$LAYOUT
 
     if [ "$LIVE_MODE" -eq 1 ]; then
         tput_cmd cup 0 0
     fi
 
-    if [ "$WIDE_MODE" -eq 1 ]; then
-        render_wide_dashboard
-    elif [ "$cols" -ge 60 ] && [ "$lines" -ge 20 ]; then
-        render_compact_dashboard "$cols" "$lines"
-        if [ "$LIVE_MODE" -eq 1 ]; then
-            tput_cmd ed
+    if [ "$layout" = auto ]; then
+        if [ "$cols" -ge 60 ] && [ "$lines" -ge 20 ]; then
+            layout=compact
+        elif [ "$cols" -ge 45 ] && [ "$lines" -ge 12 ]; then
+            layout=mini
+        elif [ "$cols" -ge 36 ] && [ "$lines" -ge 8 ]; then
+            layout=micro
+        else
+            layout=tiny
         fi
-    elif [ "$cols" -ge 45 ] && [ "$lines" -ge 12 ]; then
-        render_mini_dashboard "$cols" "$lines"
-        if [ "$LIVE_MODE" -eq 1 ]; then
-            tput_cmd ed
-        fi
-    elif [ "$cols" -ge 36 ] && [ "$lines" -ge 8 ]; then
-        render_micro_dashboard "$cols" "$lines"
-        if [ "$LIVE_MODE" -eq 1 ]; then
-            tput_cmd ed
-        fi
-    else
-        render_tiny_fallback "$cols"
-        if [ "$LIVE_MODE" -eq 1 ]; then
-            tput_cmd ed
-        fi
+    fi
+    case "$layout" in
+        wide) render_wide_dashboard ;;
+        compact) render_compact_dashboard "$cols" "$lines" ;;
+        mini) render_mini_dashboard "$cols" "$lines" ;;
+        micro) render_micro_dashboard "$cols" "$lines" ;;
+        tiny) render_tiny_fallback "$cols" ;;
+    esac
+    if [ "$LIVE_MODE" -eq 1 ] && [ "$layout" != wide ]; then
+        tput_cmd ed
     fi
 }
 
@@ -935,6 +1062,7 @@ run_live() {
 }
 
 main() {
+    read_config
     parse_args "$@"
     setup_colors
     init_cpu_sample

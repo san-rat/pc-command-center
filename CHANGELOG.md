@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0 — 2026-10-24
+
+- Add an optional literal config file for refresh, colors, metric thresholds,
+  monitored filesystem, preferred network interface, and layout.
+- Add `--layout` and `--disk`; retain `--wide` as a layout alias.
+- Apply defaults < config < CLI precedence and warn on invalid config entries.
+- Preserve default layouts and add configuration and selection regressions.
+
 ## 1.3.0 — 2026-10-24
 
 - Collect metrics once per frame and share them across all layouts.

@@ -2,6 +2,7 @@
 
 setup() {
     SCRIPT="$BATS_TEST_DIRNAME/../pc-command-center.sh"
+    export XDG_CONFIG_HOME="$BATS_TEST_TMPDIR/config"
     source "$SCRIPT"
 }
 
@@ -121,7 +122,7 @@ setup() {
     [ "$REFRESH_INTERVAL" -eq 1 ]
     [ "$ENABLE_COLOR" -eq 0 ]
     [ "$ONCE" -eq 1 ]
-    [ "$WIDE_MODE" -eq 1 ]
+    [ "$LAYOUT" = wide ]
     parse_args --interval 999999
     [ "$REFRESH_INTERVAL" -eq 999999 ]
 }
@@ -150,7 +151,7 @@ setup() {
         COLUMNS=$cols LINES=$rows
         [ "$(render_dashboard)" = "$expected" ]
     done
-    WIDE_MODE=1
+    LAYOUT=wide
     [ "$(render_dashboard)" = wide ]
 }
 
