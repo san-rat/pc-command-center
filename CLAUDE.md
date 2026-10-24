@@ -1,7 +1,7 @@
 # PC Command Center — contributor guide
 
 Single-file Bash TUI for Ubuntu/Linux. Runtime code is in
-`pc-command-center.sh`; current version is 2.0.0. No build system or new runtime
+`pc-command-center.sh`; current version is 2.1.0. No build system or new runtime
 dependencies. Project notes in `doc/` are local and ignored by Git.
 
 ## Commands
@@ -45,7 +45,11 @@ snapshots. Test tooling is optional for end users.
   `PREV_CPU_*` and per-core baselines advance in the parent shell. Live process CPU
   uses `/proc/[pid]/stat` deltas; one-shot `ps` values are lifetime averages.
 - Network throughput uses counter deltas on the preferred/default-route interface;
-  battery data is optional and per-core bars render in wide mode.
+  `n` cycles available interfaces. Battery data is optional and per-core bars render
+  in wide mode.
+- Live controls use single-character input. `p` suppresses scheduled frames but not
+  input polling; `?` consumes the next key to dismiss help and repaint. `c`/`m`
+  choose the process sort metric.
 - Schedule with `${EPOCHSECONDS:-$SECONDS}`; never spawn `date` in the idle loop.
 - Live repaint uses `cup 0 0` + redraw + `ed`. Do not clear on every refresh.
 - Keep terminal setup paired with EXIT cleanup; intentional `tput`/`stty` error
@@ -59,7 +63,7 @@ snapshots. Test tooling is optional for end users.
 
 - `doc/PROJECT.md`: architecture and rationale.
 - `doc/GAPS.md`: original audit plus current resolution status.
-- `doc/ROADMAP.md`: version specs; v1.4 implemented, v2.0 next.
+- `doc/ROADMAP.md`: version specs; v1.4/v2.0 PRs and local v2.1 work.
 - `doc/WORKLOG.md`: dated implementation and verification record.
 - `CHANGELOG.md`: user-facing changes.
 
