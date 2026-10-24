@@ -205,6 +205,8 @@ selection uses the `DISK` free-space label instead of `ROOT`.
 - `p` pauses or resumes automatic refresh; input remains active while paused.
 - `?` shows the key list; any key dismisses it and redraws the dashboard.
 - `n` cycles the selected network interface when more than one is active.
+- `1`–`5` select focused views; `e` toggles events.
+- `j`/`k` navigate lists; `/`, Enter, Escape, and `a` operate process filtering/details.
 
 ## Refresh Behavior
 
@@ -232,8 +234,199 @@ Use `--wide` when you want the larger panel layout.
 CPU usage no longer waits for a blocking 1-second sample inside each refresh.
 Instead, the script stores the previous `/proc/stat` counters and calculates
 usage from the difference between dashboard refreshes.
-Each frame collects metrics once and shares the values across its panels. RAM and
+Each sampling cycle collects metrics once and shares values across all views.
+Repainting a view does not collect a sample. RAM and
 swap share one `free` call; process count and top processes share one `ps` snapshot.
+
+## History, warnings, and investigation
+
+Version 4.0 keeps the Bash terminal interface and adds session history, sustained
+warnings, focused views, read-only process exploration, storage/device monitoring,
+Linux pressure information, and explicit export/recording. No background service or
+new runtime package is required. The extra filesystem and recording operations use
+utilities from the existing coreutils dependency (`timeout`, `mktemp`, `ln`, `rm`).
+
+### Sampling and history
+
+A sample is one collection cycle. Resize, sorting, view changes, scrolling, help
+dismissal, and interval changes repaint the latest sample without reading sources
+again. `r` requests a sample; requests within the clock resolution are coalesced.
+Elapsed measurement time comes from `/proc/uptime`, while displayed timestamps use
+UTC. CPU/network/device baselines live in the parent shell.
+
+Wide Overview and Network show CPU, RAM, RX, and TX history. History is retained in
+memory for this session only. The default is 60 samples, configurable from 10 to
+600. Each character represents a sample, not a fixed time bucket. The caption
+shows the actual elapsed span and visible sample count, so changing the refresh
+interval does not mislabel the graph.
+
+The intensity alphabet is `._:-=+*#%@`, from low to high. CPU and RAM use 0–100%
+scales. RX and TX share the displayed network peak. `?` means missing/warming data;
+`|` marks a sampling discontinuity. A measured zero is `.`, never a missing point.
+Changing network interfaces invalidates the old network points while retaining
+CPU and RAM history. Smaller overview layouts retain their compact numeric display.
+
+Pause and help suspend automatic sampling. Manual refresh works while paused.
+Resuming or crossing a long sample gap re-primes rate baselines; the first affected
+CPU/network/device value may be `N/A` or warming. Unobserved time does not count
+as evidence that a warning condition persisted. An unavailable source never
+becomes a healthy zero in exported data.
+
+### Sustained warnings and recent events
+
+The existing warning/critical thresholds now also drive session warnings for CPU,
+RAM, the primary filesystem, temperature, normalized load, and swap. A threshold
+must be met or exceeded for 30 seconds of sufficiently frequent observations by
+default. Critical escalation has its own confirmation period. Recovery requires
+15 seconds below the recovery boundary, with a default margin of five percentage
+points (five degrees Celsius for temperature). Normalized-load margins are in
+percentage points of online CPU capacity.
+
+A gap longer than twice the configured interval resets pending confirmation.
+Sparse sampling can confirm a condition only when the next observation arrives;
+a 30-second threshold cannot be confirmed at 30 seconds with a 60-second interval.
+Missing data retains an active warning as stale and requires fresh evidence on
+return. Critical conditions downgrade to warning before clearing when appropriate.
+
+Press `e` to inspect recent transitions; `j`/`k` scroll and `e` closes the list.
+The default capacity is 100 events, bounded to 10–1000. Repeated observations of
+an unchanged state do not create events. Overview displays the most severe warning
+and active count; small headings show `[!]` when an alert is active. `[REC!]` marks
+recording failure. One-shot snapshots do not claim a sustained warning history.
+
+### Focused views and process details
+
+Use `1` Overview, `2` Processes, `3` Storage, `4` Network, and `5` Pressure. Each view
+fits the available terminal; `--view` selects the startup view. `?` lists controls.
+
+In Processes, `j`/`k` move selection, `c`/`m` sort by CPU/memory, and `/` opens a
+literal, case-insensitive PID/name filter. Enter applies the filter, Escape cancels,
+and backspace edits. Clear the filter text to show all processes. Filter characters
+are never shell commands or regular expressions. Input is limited to 128 characters;
+`q` typed during filter editing is part of the filter.
+
+Enter opens details for the selected process; Escape returns to the list. Details
+include user, state, elapsed lifetime, resident memory, threads, parent PID, CPU,
+and memory percentage. Selection follows PID plus kernel start time, so PID reuse
+cannot silently transfer a selection or reuse the old CPU baseline. Exited or
+unreadable processes are shown as unavailable. CPU follows the existing per-core
+convention: one fully used core is 100%, and a multithreaded process may exceed it.
+New or reused processes show N/A until an interval baseline exists.
+One-shot CPU is explicitly labeled AVG for the `ps` lifetime average.
+
+Full command arguments are off by default. Press `a` in details to enable them;
+the next sample, or `r`, reads the selected command line. The display is bounded
+and control/non-ASCII bytes are replaced with `?` to preserve ASCII terminal layout.
+No process signals, renicing, or other machine-changing actions are provided.
+
+### Filesystems and device throughput
+
+`--disk PATH` remains the primary overview filesystem and retains last-option-wins
+semantics. Add up to eight other paths with repeated `--watch-disk PATH` options.
+The first CLI `--watch-disk` replaces the configured extra selections. Quote paths
+with spaces. Config uses individual `WATCH_DISK_1` through `WATCH_DISK_8` values.
+
+Storage shows capacity, free bytes, and inode usage. Paths on the same filesystem
+are grouped by kernel device identity, including bind-mount aliases, which are
+listed together. Unavailable inode accounting displays `N/A`. A selected filesystem
+that disappears or changes identity is marked unavailable; restart to accept a new
+mount identity. Remote/FUSE/autofs selections are marked unsupported instead of
+being probed. Local `df` collection is batched and bounded by a two-second timeout
+with a one-second termination grace period. A failed batch is unavailable for that
+cycle. These synchronous probes can delay input during their bounded execution.
+
+Choose a block device explicitly, for example `--device nvme0n1` (use a device
+present on your machine). Its read/write throughput is shown separately from
+filesystem capacity. Rates use kernel counters and actual elapsed time; sector
+counters are in 512-byte units regardless of hardware sector size. The tool does
+not sum disks, partitions, or device-mapper layers and does not automatically map a
+filesystem to its physical backing device. Switching/resetting a device warms its
+baseline. See the [kernel block-statistics documentation](https://docs.kernel.org/block/stat.html).
+
+### Resource pressure
+
+Pressure shows supported CPU, memory, and I/O `some`/`full` averages over 10, 60,
+and 300 seconds. These are percentages of time stalled on resources, not usage
+percentages. System-level CPU `full` is undefined and omitted. Missing fields show
+`N/A`. Pressure is optional, requires no privilege or new dependency, and has no
+automatic alert thresholds. See the [kernel PSI documentation](https://docs.kernel.org/accounting/psi.html).
+
+### Additional configuration
+
+| Key | Default | Allowed values |
+|---|---|---|
+| `HISTORY_ENABLED` | `1` | `0` or `1` |
+| `HISTORY_SAMPLES` | `60` | Integer 10–600 |
+| `WARNINGS_ENABLED` | `1` | `0` or `1` |
+| `ALERT_TRIGGER_SECONDS` | `30` | Integer 1–3600 |
+| `ALERT_RECOVERY_SECONDS` | `15` | Integer 1–3600 |
+| `ALERT_PERCENT_MARGIN` | `5` | Integer 0–100 |
+| `ALERT_TEMP_MARGIN` | `5` | Integer 0–999 |
+| `EVENT_CAPACITY` | `100` | Integer 10–1000 |
+| `PRESSURE_ENABLED` | `1` | `0` or `1` |
+| `BLOCK_DEVICE` | Empty | Explicit kernel device name; empty disables |
+| `WATCH_DISK_1` … `WATCH_DISK_8` | Unset | One existing directory per key |
+
+These settings follow the existing literal parser and precedence rules. Disabling
+history does not disable warnings. Disabling warnings does not disable history.
+No setting causes history or events to be saved automatically.
+
+## JSON, CSV, and optional recording
+
+```bash
+pcc --once --format json
+pcc --once --format csv
+pcc --wide --record ./session.csv
+pcc --view storage --disk / --watch-disk /home --device nvme0n1
+```
+
+`--format json` and `--format csv` imply one-shot output and work without a TTY.
+`--format terminal` is the default. JSON is one object; CSV is a header plus one
+sample row. Both use schema version 1 and raw numeric units. Field names and units:
+
+| Fields | Meaning |
+|---|---|
+| `schema_version`, `app_version` | Data contract and application versions |
+| `session_id`, `sample_sequence` | Session identity and increasing sample number |
+| `timestamp_utc`, `elapsed_ms`, `interval_ms` | UTC sample time, elapsed session time, time since prior sample |
+| `text_encoding` | `percent-bytes`, described below |
+| `disk_path`, `interface` | Primary resource selections |
+| `cpu`, `ram`, `swap`, `disk` | Integer percentage values |
+| `memory_used_bytes`, `memory_total_bytes` | RAM byte counts |
+| `swap_used_bytes`, `swap_total_bytes` | Swap byte counts |
+| `disk_used_bytes`, `disk_available_bytes` | Primary filesystem byte counts |
+| `rx`, `tx` | Integer bytes per second |
+| `temp` | Integer degrees Celsius |
+| `<metric>_state` | `valid`, `warming`, `unavailable`, or `unsupported` |
+
+Every numeric metric has a companion state. Unavailable values are JSON `null` or
+empty CSV fields. A measured zero remains numeric zero. The first rate sample can
+be warming. Multi-filesystem rows, process arguments, hostname, user identity, and
+event history are not included in schema 1.
+
+Text fields use reversible percent encoding of bytes. ASCII letters, digits,
+underscore, slash, period, colon, and non-leading hyphens remain literal; other
+bytes become `%HH`. Decode percent escapes as bytes before interpreting text as
+UTF-8. This preserves arbitrary Linux path bytes, prevents terminal control data
+from leaking into output, and prevents spreadsheet formulas from appearing at the
+start of CSV text fields. JSON/CSV syntax characters are encoded as text data.
+The output is ASCII and independent of the numeric locale. For example, a space
+is `%20`, a quote is `%22`, a percent sign is `%25`, and a leading `=` is `%3D`.
+
+`--record PATH` requires interactive stdin and stdout and cannot be combined with
+one-shot or JSON/CSV output. It creates one new private regular CSV file (mode
+0600), never overwrites an existing path, and refuses existing symlinks, directories,
+FIFOs, or files. The parent directory must exist and be writable. Publication uses
+a private temporary inode and an atomic hard link; the filesystem must support
+hard links. There is no append or overwrite mode.
+
+Each completed live sample produces one row. Repaints do not write rows. Pause and
+help leave timestamp gaps. Recording stops at 100 MiB or after a write error,
+reports the failure in the dashboard, and makes the eventual exit status nonzero;
+monitoring continues. A requested recording that cannot start fails before entering
+the live dashboard. Descriptors close on normal quit/SIGINT/SIGTERM. Power-loss
+persistence and a final row after SIGKILL are not guaranteed.
+
 
 ## Notes
 
@@ -247,18 +440,21 @@ swap share one `free` call; process count and top processes share one `ps` snaps
 
 ## Development and project direction
 
-The current version is **2.1.0**. Runtime requirements are unchanged; Bats and
-ShellCheck are development tools only. On Ubuntu, install them and run:
+The current version is **4.0.0**. Runtime requirements are unchanged; Bats and
+ShellCheck are development tools only. Python 3 is used only by independent
+JSON/CSV parser and PTY integration tests. On Ubuntu, install them and run:
 
 ```bash
-sudo apt install bats shellcheck
+sudo apt install bats shellcheck python3
 bash -n pc-command-center.sh
 shellcheck pc-command-center.sh
 bats tests
 ```
 
 GitHub Actions runs these syntax, lint, and regression checks on pushes and pull
-requests. The tests cover formatting, CPU delta math, temperature/process parsing,
+requests. The tests cover sample/repaint separation, bounded histories, warning transitions,
+process identity/filtering, device counters, export parsing, recording failures,
+formatting, CPU delta math, temperature/process parsing,
 CLI validation, layout routing boundaries, telemetry deltas, and snapshots of all five layouts.
 Snapshot tests check layout properties rather than changing live metric values.
 Additional checks cover consecutive CPU samples, one collection per source per
@@ -270,7 +466,8 @@ The script can also be sourced to test functions without launching the dashboard
 Project planning notes are kept locally in the ignored `doc/` directory.
 See the [changelog](CHANGELOG.md) for user-facing release history.
 
-The next planned stage is **v3.0**: installable packaging and release artifacts.
+The post-v3 improvements are implemented in 4.0.0. See the feature and output
+contracts above and the changelog for the release scope.
 
 ## License
 

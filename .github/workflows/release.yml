@@ -16,7 +16,7 @@ jobs:
       - name: Install checks and runtime dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bats coreutils grep gawk hostname iproute2 man-db mawk ncurses-bin procps sed shellcheck
+          sudo apt-get install -y bats coreutils grep gawk hostname iproute2 man-db mawk ncurses-bin procps python3 sed shellcheck
       - name: Verify tag and run checks
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -27,6 +27,7 @@ jobs:
           bash -n pc-command-center.sh
           shellcheck pc-command-center.sh packaging/*.sh
           bats --print-output-on-failure tests
+          python3 tests/terminal.py
       - name: Build Debian package
         env:
           RELEASE_TAG: ${{ github.ref_name }}

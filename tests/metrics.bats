@@ -1,10 +1,17 @@
 #!/usr/bin/env bats
 
+source "$BATS_TEST_DIRNAME/../pc-command-center.sh"
+source "$BATS_TEST_DIRNAME/test_helper.bash"
+
 setup() {
-    source "$BATS_TEST_DIRNAME/../pc-command-center.sh"
+    init_test_arrays
     CALLS="$BATS_TEST_TMPDIR/calls"
     : > "$CALLS"
     tput_cmd() { :; }
+    timeout() { shift 3; "$@"; }
+    read_mounts() { MOUNT_PATHS=(/); MOUNT_DEVS=(8:1); MOUNT_TYPES=(ext4); }
+    collect_device() { :; }
+    collect_pressure() { :; }
     read_cpu_times() {
         echo cpu >> "$CALLS"
         CPU_IDLE=${TEST_IDLE:-160}
@@ -18,12 +25,12 @@ setup() {
     df() {
         echo df >> "$CALLS"
         [ "${EMPTY:-0}" -eq 1 ] && return
-        printf 'Filesystem Size Used Avail Use%% Mounted\n/dev/root 100G 25G 75G 25%% /\n'
+        printf 'Size Used Avail Use%% Inodes IUsed IFree IUse%%\n107374182400 26843545600 80530636800 25%% 1000 250 750 25%%\n'
     }
     ps() {
         echo ps >> "$CALLS"
         [ "${EMPTY:-0}" -eq 1 ] && return
-        printf '%s\n' '1234 Isolated Web Co 12.3 4.5' '2345 tmux: server 1.2 0.3'
+        printf '%s\n' '1234 user S 10 100 1 1 12.3 4.5 Isolated Web Co' '2345 user S 10 100 1 1 1.2 0.3 tmux: server'
     }
     ip() {
         echo ip >> "$CALLS"
@@ -53,11 +60,12 @@ setup() {
     }
 }
 
-@test "all layouts collect each source exactly once per frame" {
+@test "one explicit sample serves all layouts without recollection" {
     local spec source
     for spec in '80 24 auto' '50 14 auto' '40 9 auto' '30 5 auto' '110 30 wide'; do
         read -r COLUMNS LINES LAYOUT <<< "$spec"
         : > "$CALLS"
+        collect_metrics
         render_dashboard > "$BATS_TEST_TMPDIR/frame"
         for source in cpu free df ps ip temperature uptime hostname whoami date getconf network battery; do
             [ "$(grep -cx "$source" "$CALLS")" -eq 1 ]
@@ -65,14 +73,16 @@ setup() {
     done
 }
 
-@test "consecutive rendered frames advance CPU counters in the parent shell" {
+@test "consecutive collected samples advance CPU counters in the parent shell" {
     COLUMNS=30 LINES=5
     PREV_CPU_IDLE=100 PREV_CPU_TOTAL=200
+    collect_metrics
     render_dashboard > "$BATS_TEST_TMPDIR/frame"
     [ "$METRIC_CPU" -eq 40 ]
     [ "$PREV_CPU_IDLE" -eq 160 ]
     [ "$PREV_CPU_TOTAL" -eq 300 ]
     TEST_IDLE=180 TEST_TOTAL=400
+    collect_metrics
     render_dashboard > "$BATS_TEST_TMPDIR/frame"
     [ "$METRIC_CPU" -eq 80 ]
     [ "$PREV_CPU_IDLE" -eq 180 ]
@@ -84,7 +94,7 @@ setup() {
     collect_metrics
     [ "$METRIC_MEM_USED/$METRIC_MEM_TOTAL $METRIC_MEM_PERCENT" = '2.0Gi/8.0Gi 25' ]
     [ "$METRIC_SWAP_USED/$METRIC_SWAP_TOTAL $METRIC_SWAP_PERCENT" = '1.0Gi/4.0Gi 25' ]
-    [ "$METRIC_DISK_USED/$METRIC_DISK_TOTAL $METRIC_DISK_AVAILABLE $METRIC_DISK_PERCENT" = '25G/100G 75G 25' ]
+    [ "$METRIC_DISK_USED/$METRIC_DISK_TOTAL $METRIC_DISK_AVAILABLE $METRIC_DISK_PERCENT" = '25Gi/100Gi 75Gi 25' ]
     [ "$METRIC_PROCESS_COUNT" -eq 2 ]
     [ "$METRIC_INTERFACE" = 'eth1 192.0.2.1/24' ]
     [ "${#METRIC_INTERFACES[@]}" -eq 4 ]
@@ -116,10 +126,10 @@ setup() {
     mkdir "$DISK_PATH"
     df() {
         printf '%s\n' "$@" > "$BATS_TEST_TMPDIR/df-args"
-        printf 'Filesystem Size Used Avail Use%% Mounted\n/dev/test 100G 25G 75G 25%% /\n'
+        printf 'Size Used Avail Use%% Inodes IUsed IFree IUse%%\n107374182400 26843545600 80530636800 25%% 1000 250 750 25%%\n'
     }
     collect_metrics
-    [ "$(cat "$BATS_TEST_TMPDIR/df-args")" = "$(printf '%s\n' -hP -- "$DISK_PATH")" ]
+    [ "$(cat "$BATS_TEST_TMPDIR/df-args")" = "$(printf '%s\n' -B1 --output=size,used,avail,pcent,itotal,iused,iavail,ipcent -- "$DISK_PATH")" ]
     [ "$METRIC_DISK_LABEL" = DISK ]
     [ "$METRIC_DISK_PERCENT" -eq 25 ]
 }
@@ -143,7 +153,8 @@ setup() {
     collect_metrics
     [ "$METRIC_MEM_USED/$METRIC_MEM_TOTAL $METRIC_MEM_PERCENT" = 'N/A/N/A 0' ]
     [ "$METRIC_DISK_PERCENT" -eq 0 ]
-    [ -z "$METRIC_DISK_AVAILABLE" ]
+    [ "$METRIC_DISK_AVAILABLE" = N/A ]
+    [ "${SAMPLE_STATE[disk]}" = unavailable ]
     [ "$METRIC_PROCESS_COUNT" -eq 0 ]
     [ -z "$(format_process_rows 10 4 5)" ]
     [ "$(top_process_summary 10)" = N/A ]
@@ -196,6 +207,7 @@ setup() {
 
 @test "refresh keys draw once and schedule the next refresh without date" {
     render_dashboard() { echo draw >> "$CALLS"; }
+    collect_sample() { :; }
     date() { echo unexpected-date >> "$CALLS"; return 1; }
     local key before
     for key in r + -; do

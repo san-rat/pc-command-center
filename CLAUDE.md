@@ -1,7 +1,7 @@
 # PC Command Center — contributor guide
 
 Single-file Bash TUI for Ubuntu/Linux. Runtime code is in
-`pc-command-center.sh`; current version is 3.0.0. The Makefile supports source
+`pc-command-center.sh`; current version is 4.0.0. The Makefile supports source
 installation, removal, manual generation, and Debian package creation. Project
 notes in `doc/` are local and ignored by Git.
 
@@ -28,7 +28,8 @@ snapshots. Test tooling is optional for end users.
 
 - Bash >= 4 and GNU/Linux tools; no macOS compatibility layer.
 - `snake_case` functions, local function variables, uppercase globals in the header.
-- `collect_metrics` runs once per frame in the parent shell and fills `METRIC_*`.
+- `collect_sample` publishes a timestamped sample; `collect_metrics` fills `METRIC_*`
+  and raw `SAMPLE_VALUE`/`SAMPLE_STATE` fields in the parent shell.
   Renderers only consume those values; do not collect data inside a renderer.
 - Share process rows through `format_process_rows`. `read_dimensions` caches
   terminal size in live mode until a `WINCH` signal marks it dirty.
@@ -46,10 +47,14 @@ snapshots. Test tooling is optional for end users.
   `--layout` forces a tier and `--wide` aliases `--layout wide`.
 - First render waits 0.25s for a CPU sample. Call `get_cpu_usage` directly so
   `PREV_CPU_*` and per-core baselines advance in the parent shell. Live process CPU
-  uses `/proc/[pid]/stat` deltas; one-shot `ps` values are lifetime averages.
+  uses `/proc/[pid]/stat` deltas keyed by PID and start time; one-shot `ps` values are lifetime averages.
 - Network throughput uses counter deltas on the preferred/default-route interface;
   `n` cycles available interfaces. Battery data is optional and per-core bars render
   in wide mode.
+- History/event arrays are bounded ring buffers. Repaints never append or evaluate.
+- Storage batches local `df` under a timeout; remote/FUSE/autofs paths are unsupported.
+- JSON/CSV schema 1 percent-encodes text bytes. Recording creates a new 0600 inode
+  and atomically links it to the destination; never append or overwrite implicitly.
 - Live controls use single-character input. `p` suppresses scheduled frames but not
   input polling; `?` consumes the next key to dismiss help and repaint. `c`/`m`
   choose the process sort metric.
