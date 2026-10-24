@@ -1,7 +1,7 @@
 # PC Command Center — contributor guide
 
 Single-file Bash TUI for Ubuntu/Linux. Runtime code is in
-`pc-command-center.sh`; current version is 1.3.0. No build system or new runtime
+`pc-command-center.sh`; current version is 1.4.0. No build system or new runtime
 dependencies. Project notes in `doc/` are local and ignored by Git.
 
 ## Commands
@@ -29,13 +29,18 @@ snapshots. Test tooling is optional for end users.
   Renderers only consume those values; do not collect data inside a renderer.
 - Share process rows through `format_process_rows`. `read_dimensions` caches
   terminal size in live mode until a `WINCH` signal marks it dirty.
+- `read_config` parses known literal settings before `parse_args`; never source
+  or evaluate config content. Keep defaults < config < CLI precedence.
+- Configure thresholds with the `CPU`, `RAM`, `DISK`, `TEMP`, `LOAD`, and `SWAP`
+  `*_WARN`/`*_CRIT` globals. Validate complete pairs after parsing the config.
 - Use `tput_cmd` for terminal capabilities and validate numeric output before
   arithmetic; failed terminal queries return an empty string.
 - Use `pad_ansi`, `center_ansi`, and `print_fit_line` for width-sensitive output.
   Width calculations count characters, so keep UI glyphs ASCII.
 - Colors use `setup_colors` variables and `$RESET`; honor `--no-color`.
 - Keep compact width capped at 88 columns. Tier thresholds: compact 60x20,
-  mini 45x12, micro 36x8, otherwise tiny. `--wide` selects the wide layout.
+  mini 45x12, micro 36x8, otherwise tiny. `LAYOUT=auto` selects those tiers;
+  `--layout` forces a tier and `--wide` aliases `--layout wide`.
 - First render waits 0.25s for a CPU sample. Call `get_cpu_usage` directly so
   `PREV_CPU_*` advances in the parent shell. `ps` process CPU remains a lifetime
   average; interval sampling is planned for v2.0.
@@ -52,7 +57,7 @@ snapshots. Test tooling is optional for end users.
 
 - `doc/PROJECT.md`: architecture and rationale.
 - `doc/GAPS.md`: original audit plus current resolution status.
-- `doc/ROADMAP.md`: version specs; v1.3 implemented, v1.4 next.
+- `doc/ROADMAP.md`: version specs; v1.4 implemented, v2.0 next.
 - `doc/WORKLOG.md`: dated implementation and verification record.
 - `CHANGELOG.md`: user-facing changes.
 

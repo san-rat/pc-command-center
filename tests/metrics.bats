@@ -47,8 +47,8 @@ setup() {
 
 @test "all layouts collect each source exactly once per frame" {
     local spec source
-    for spec in '80 24 0' '50 14 0' '40 9 0' '30 5 0' '110 30 1'; do
-        read -r COLUMNS LINES WIDE_MODE <<< "$spec"
+    for spec in '80 24 auto' '50 14 auto' '40 9 auto' '30 5 auto' '110 30 wide'; do
+        read -r COLUMNS LINES LAYOUT <<< "$spec"
         : > "$CALLS"
         render_dashboard > "$BATS_TEST_TMPDIR/frame"
         for source in cpu free df ps ip temperature uptime hostname whoami date getconf; do
@@ -84,6 +84,44 @@ setup() {
     [ "$METRIC_TEMP_SHORT $METRIC_TEMP_PERCENT" = '+42.0°C 42' ]
     [ "$(top_process_summary 10)" = 'Isolated ~ 12.3%' ]
     [ "$(format_process_rows 10 1 5 | wc -l)" -eq 1 ]
+}
+
+@test "preferred interface filters addresses and selects its own gateway" {
+    NETWORK_INTERFACE=eth2
+    collect_metrics
+    [ "$METRIC_INTERFACE" = 'eth2 192.0.2.2/24' ]
+    [ "${#METRIC_INTERFACES[@]}" -eq 1 ]
+    [ "$METRIC_GATEWAY" = '192.0.2.253 via eth2' ]
+    NETWORK_INTERFACE=eth5
+    collect_metrics
+    [ "$METRIC_INTERFACE" = 'eth5 192.0.2.5/24' ]
+    [ -z "$METRIC_GATEWAY" ]
+    NETWORK_INTERFACE=absent
+    collect_metrics
+    [ "$METRIC_INTERFACE" = 'No active IPv4' ]
+    [ "${#METRIC_INTERFACES[@]}" -eq 0 ]
+    [ -z "$METRIC_GATEWAY" ]
+}
+
+@test "selected disk directory is passed as one argument after option terminator" {
+    DISK_PATH="$BATS_TEST_TMPDIR/disk with spaces"
+    mkdir "$DISK_PATH"
+    df() {
+        printf '%s\n' "$@" > "$BATS_TEST_TMPDIR/df-args"
+        printf 'Filesystem Size Used Avail Use%% Mounted\n/dev/test 100G 25G 75G 25%% /\n'
+    }
+    collect_metrics
+    [ "$(cat "$BATS_TEST_TMPDIR/df-args")" = "$(printf '%s\n' -hP -- "$DISK_PATH")" ]
+    [ "$METRIC_DISK_LABEL" = DISK ]
+    [ "$METRIC_DISK_PERCENT" -eq 25 ]
+}
+
+@test "preferred interface supports a direct default route without a gateway" {
+    NETWORK_INTERFACE=ppp0
+    ip() { printf '1: ppp0 inet 192.0.2.1/24 scope global\ndefault dev ppp0 scope link\n'; }
+    collect_metrics
+    [ "$METRIC_INTERFACE" = 'ppp0 192.0.2.1/24' ]
+    [ "$METRIC_GATEWAY" = 'dev ppp0' ]
 }
 
 @test "zero swap and absent sources replace previous frame values" {

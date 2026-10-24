@@ -13,11 +13,11 @@ instead of clearing and repainting the whole screen on every refresh.
 - Current user, hostname, date/time, and uptime
 - CPU usage calculated from `/proc/stat` deltas between refresh ticks
 - RAM usage from `free`
-- Root disk usage from `df`
+- Selected filesystem usage from `df` (root by default)
 - Load average from `/proc/loadavg`
 - Process count from `ps`
 - Swap usage from `free`
-- Root disk free space from `df`
+- Selected filesystem free space from `df`
 - CPU/system temperature when available
 - Active IPv4 network interfaces
 - Default gateway
@@ -27,6 +27,7 @@ instead of clearing and repainting the whole screen on every refresh.
 - Keyboard controls for quitting, refreshing, and changing refresh speed
 - Optional one-shot output mode for quick checks or scripts
 - Optional wide layout for larger terminal windows
+- Optional configuration for refresh, colors, thresholds, filesystem, interface, and layout
 
 ## Requirements
 
@@ -88,6 +89,8 @@ The default refresh interval is 5 seconds.
 ./pc-command-center.sh --no-color
 ./pc-command-center.sh --once
 ./pc-command-center.sh --wide
+./pc-command-center.sh --layout mini
+./pc-command-center.sh --disk /home
 ./pc-command-center.sh --help
 ./pc-command-center.sh --version
 ```
@@ -95,9 +98,68 @@ The default refresh interval is 5 seconds.
 - `--interval SECONDS` sets the live refresh interval (1-999999 seconds).
 - `--no-color` disables terminal colors.
 - `--once` prints one dashboard snapshot and exits; it takes ~0.25s so CPU% can be measured over a short sampling window.
-- `--wide` uses the roomier panel layout for larger terminal windows.
+- `--layout compact|mini|micro|tiny|wide` forces a layout regardless of terminal dimensions. Forced layouts may require more space than a very small terminal provides.
+- `--wide` is an alias for `--layout wide`.
+- `--disk PATH` monitors the filesystem containing an existing directory. Paths with spaces must be quoted. The default is `/`.
 - `--help` shows usage information.
 - `--version` prints the current version and exits.
+
+### Configuration
+
+The optional config file is `~/.config/pc-command-center.conf`. When
+`XDG_CONFIG_HOME` is set, the file is read from that directory instead.
+Precedence is **defaults < config < CLI flags**; repeated CLI options use the last
+value. Config is read once at startup.
+
+Use one `KEY=value` entry per line. Blank lines and lines starting with `#` are
+ignored. Spaces around keys/values and matching outer single or double quotes
+are supported. Values are literal: no variable expansion, command substitution,
+escape processing, or inline comments. The last valid entry for a key wins.
+Invalid entries print one warning and are ignored; the dashboard keeps running.
+
+```ini
+REFRESH_INTERVAL=3
+ENABLE_COLOR=1
+DISK_PATH=/
+NETWORK_INTERFACE=
+LAYOUT=auto
+CPU_WARN=60
+CPU_CRIT=85
+RAM_WARN=75
+RAM_CRIT=90
+DISK_WARN=75
+DISK_CRIT=90
+TEMP_WARN=70
+TEMP_CRIT=85
+LOAD_WARN=70
+LOAD_CRIT=100
+SWAP_WARN=50
+SWAP_CRIT=80
+```
+
+| Key | Allowed values | Default |
+|---|---|---|
+| `REFRESH_INTERVAL` | Integer, 1–999999 seconds | `5` |
+| `ENABLE_COLOR` | `0` off, `1` on when the terminal supports color | `1` |
+| `DISK_PATH` | One existing directory; all disk fields refer to its filesystem | `/` |
+| `NETWORK_INTERFACE` | Existing interface name; empty lists all active IPv4 interfaces | Empty |
+| `LAYOUT` | `auto`, `compact`, `mini`, `micro`, `tiny`, `wide` | `auto` |
+| `CPU_WARN`, `CPU_CRIT` | Integer percentage, 0–100 | `60`, `85` |
+| `RAM_WARN`, `RAM_CRIT` | Integer percentage, 0–100 | `75`, `90` |
+| `DISK_WARN`, `DISK_CRIT` | Integer percentage, 0–100 | `75`, `90` |
+| `TEMP_WARN`, `TEMP_CRIT` | Integer degrees Celsius, 0–999 | `70`, `85` |
+| `LOAD_WARN`, `LOAD_CRIT` | Integer percentage of online CPU capacity, 0–999999 | `70`, `100` |
+| `SWAP_WARN`, `SWAP_CRIT` | Integer percentage, 0–100 | `50`, `80` |
+
+Each warning threshold must be lower than its critical threshold. Pairs are
+validated after reading the whole file, so either order works. An invalid pair
+produces one warning and both overrides are ignored. If only one threshold is
+specified, it is checked against the other threshold's default.
+
+Setting `NETWORK_INTERFACE` filters both the displayed IPv4 addresses and the
+default route to that interface. If it has no active global IPv4 address or
+default route, the corresponding field shows unavailable data. Non-root disk
+selection uses the `DISK` free-space label instead of `ROOT`.
 
 ### Live Controls
 
@@ -147,7 +209,7 @@ swap share one `free` call; process count and top processes share one `ps` snaps
 
 ## Development and project direction
 
-The current version is **1.3.0**. Runtime requirements are unchanged; Bats and
+The current version is **1.4.0**. Runtime requirements are unchanged; Bats and
 ShellCheck are development tools only. On Ubuntu, install them and run:
 
 ```bash
@@ -163,13 +225,15 @@ CLI validation, layout routing boundaries, and snapshots of all five layouts.
 Snapshot tests check layout properties rather than changing live metric values.
 Additional checks cover consecutive CPU samples, one collection per source per
 frame, absent data, cached terminal dimensions, and refresh-key scheduling.
+Configuration checks cover every key, validation, literal parsing, CLI precedence,
+forced layouts, disk paths, and interface-specific routes.
 The script can also be sourced to test functions without launching the dashboard.
 
 Project planning notes are kept locally in the ignored `doc/` directory.
 See the [changelog](CHANGELOG.md) for user-facing release history.
 
-The next planned stage is **v1.4**: optional configuration and layout/disk flags,
-while preserving the default dashboard behavior.
+The next planned stage is **v2.0**: network throughput, interval process CPU,
+battery status, and per-core CPU bars.
 
 ## License
 
