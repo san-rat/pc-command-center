@@ -1,7 +1,7 @@
 # PC Command Center — contributor guide
 
 Single-file Bash TUI for Ubuntu/Linux. Runtime code is in
-`pc-command-center.sh`; current version is 4.0.0. The Makefile supports source
+`pc-command-center.sh`; current version is 4.1.0. The Makefile supports source
 installation, removal, manual generation, and Debian package creation. Project
 notes in `doc/` are local and ignored by Git.
 
@@ -34,7 +34,7 @@ snapshots. Test tooling is optional for end users.
 - Share process rows through `format_process_rows`. `read_dimensions` caches
   terminal size in live mode until a `WINCH` signal marks it dirty.
 - `read_config` parses known literal settings before `parse_args`; never source
-  or evaluate config content. Keep defaults < config < CLI precedence.
+  or evaluate config content. Keep defaults < base config < selected profile < CLI precedence.
 - Configure thresholds with the `CPU`, `RAM`, `DISK`, `TEMP`, `LOAD`, and `SWAP`
   `*_WARN`/`*_CRIT` globals. Validate complete pairs after parsing the config.
 - Use `tput_cmd` for terminal capabilities and validate numeric output before
@@ -59,6 +59,11 @@ snapshots. Test tooling is optional for end users.
   input polling; `?` consumes the next key to dismiss help and repaint. `c`/`m`
   choose the process sort metric.
 - Schedule with `${EPOCHSECONDS:-$SECONDS}`; never spawn `date` in the idle loop.
+- Profile selection is resolved before parsing config; names never contain paths.
+  Both layers use the same literal parser. Doctor never starts sampling or a TUI.
+- ANSI width checks use `strip_ansi_text` and shared `PLAIN_TEXT`; preserve existing
+  SGR-only stripping and ASCII width semantics without spawning sed.
+- Optional latency measurements: `python3 tests/latency.py`; no timing thresholds in CI.
 - Live repaint uses `cup 0 0` + redraw + `ed`. Do not clear on every refresh.
 - Keep terminal setup paired with EXIT cleanup; intentional `tput`/`stty` error
   guards prevent missing terminal capabilities from crashing the dashboard.
