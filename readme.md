@@ -136,13 +136,16 @@ The default refresh interval is 5 seconds.
 - `--wide` is an alias for `--layout wide`.
 - `--disk PATH` monitors the filesystem containing an existing directory. Paths with spaces must be quoted. The default is `/`.
 - `--help` shows usage information.
+- `--profile NAME` selects a named configuration profile.
+- `--list-profiles` lists available profile names and exits.
+- `--doctor` reports dependencies, source capabilities, and configuration diagnostics.
 - `--version` prints the current version and exits.
 
 ### Configuration
 
 The optional config file is `~/.config/pc-command-center.conf`. When
 `XDG_CONFIG_HOME` is set, the file is read from that directory instead.
-Precedence is **defaults < config < CLI flags**; repeated CLI options use the last
+Precedence is **defaults < base config < selected profile < CLI flags**; repeated CLI options use the last
 value. Config is read once at startup.
 
 Use one `KEY=value` entry per line. Blank lines and lines starting with `#` are
@@ -194,6 +197,99 @@ Setting `NETWORK_INTERFACE` filters both the displayed IPv4 addresses and the
 default route to that interface. If it has no active global IPv4 address or
 default route, the corresponding field shows unavailable data. Non-root disk
 selection uses the `DISK` free-space label instead of `ROOT`.
+
+### Named configuration profiles
+
+Use profiles to switch between configurations without editing the base file:
+
+```bash
+pcc --list-profiles
+pcc --profile daily
+pcc --profile development --interval 3
+pcc --profile low-power
+```
+
+Profiles are optional literal `KEY=value` files under
+`~/.config/pc-command-center/profiles/NAME.conf`, or
+`$XDG_CONFIG_HOME/pc-command-center/profiles/NAME.conf` when that variable is set.
+Names contain 1–64 ASCII letters, digits, underscores, or hyphens and must start
+with a letter or digit. Dots, slashes, whitespace, and path traversal are rejected.
+A selected profile must be a readable regular file; a missing profile is an error.
+No profile is selected automatically.
+
+Precedence is **defaults < base config < selected profile < CLI flags**. Profile
+selection is resolved before loading files, so CLI flags win regardless of where
+`--profile` appears. Repeated `--profile` options select the last name. Profiles use
+exactly the same allowed keys, quoting, validation, and literal parsing as the base
+config; they cannot execute commands, include files, or select another profile.
+Threshold pairs are validated per layer against inherited values. An invalid pair
+in a profile keeps the inherited pair. Indexed `WATCH_DISK_1` … `WATCH_DISK_8` keys
+override those individual entries; the first CLI `--watch-disk` still replaces the
+whole extra-filesystem selection.
+
+Three editable examples are included in `examples/profiles/` and installed under
+`PREFIX/share/doc/pc-command-center/examples/profiles/` (the Debian package uses
+`/usr/share/doc/pc-command-center/examples/profiles/`). They are not automatically
+copied into your configuration directory:
+
+```bash
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/pc-command-center/profiles"
+cp examples/profiles/*.conf "${XDG_CONFIG_HOME:-$HOME/.config}/pc-command-center/profiles/"
+# For a Debian installation, copy from /usr/share/doc/pc-command-center/examples/profiles/ instead.
+```
+
+`daily` uses the normal five-second interval and automatic layout. `development`
+uses a two-second interval, wide layout, and longer history. `low-power` reduces
+monitoring frequency to 15 seconds and disables history/pressure collection; it is
+an overhead-reduction preset, not a measured battery-saving guarantee. Settings
+not specified in a profile inherit the base config/defaults.
+
+### Diagnose unavailable readings
+
+```bash
+pcc --doctor
+pcc --doctor --profile development
+pcc --doctor --disk /home --device nvme0n1
+```
+
+`--doctor` prints a read-only report and exits without starting the TUI, priming
+CPU sampling, recording, or writing configuration. It checks required commands,
+configuration warnings and effective settings, terminal capabilities, procfs,
+memory/process tools, selected filesystem/inode support, explicit block-device
+counters, IPv4 availability, temperature sources, battery, and optional pressure.
+Each result includes a reason or practical next step when a capability is limited.
+Command probes have a two-second timeout plus a one-second termination grace;
+several slow probes can therefore make the complete report take longer. No install,
+repair, privileged probe, or sensor-configuration command runs automatically.
+
+`OK` means available, `INFO` explains an expected condition, `WARN` identifies a
+limited or optional capability, and `FAIL` identifies a missing required command.
+The exit status is 1 if a required command is missing, otherwise 0; optional missing
+hardware and ignored configuration entries remain warnings. Argument/profile errors
+also exit 1. A successful diagnostic does not guarantee that every per-process file
+is readable or that a device remains connected. Throughput still needs two samples.
+`--doctor` cannot be combined with JSON/CSV output or recording.
+
+### Responsiveness and measurement
+
+Width calculations now strip SGR color codes using Bash builtins, and fitted-line
+rendering avoids a command substitution per line. This reduces cached repaint and
+navigation overhead while preserving existing output, sample publication, rate
+baselines, history, and recording behavior. Pressure file reads also avoid `cat`
+subprocesses. Sampling remains synchronous: process scans and bounded filesystem
+probes can still delay input. Repainting does not collect a new sample.
+
+For repeatable collection, cached-render/handler, and real terminal key-to-frame
+measurements, run the optional development-only harness:
+
+```bash
+python3 tests/latency.py
+python3 tests/latency.py --script /path/to/baseline.sh --samples 7
+```
+
+This uses Python's standard library, live host data, and a Linux PTY. Results vary
+with process count, host load, terminal size, and selected resources; no universal
+latency limit is asserted. See [measured results and method](docs/PERFORMANCE.md).
 
 ### Live Controls
 
@@ -440,7 +536,7 @@ persistence and a final row after SIGKILL are not guaranteed.
 
 ## Development and project direction
 
-The current version is **4.0.0**. Runtime requirements are unchanged; Bats and
+The current version is **4.1.0**. Runtime requirements are unchanged; Bats and
 ShellCheck are development tools only. Python 3 is used only by independent
 JSON/CSV parser and PTY integration tests. On Ubuntu, install them and run:
 
@@ -466,7 +562,8 @@ The script can also be sourced to test functions without launching the dashboard
 Project planning notes are kept locally in the ignored `doc/` directory.
 See the [changelog](CHANGELOG.md) for user-facing release history.
 
-The post-v3 improvements are implemented in 4.0.0. See the feature and output
+The post-v3 monitoring improvements were introduced in 4.0.0; 4.1.0 adds
+responsiveness improvements, diagnostics, and profiles. See the feature and output
 contracts above and the changelog for the release scope.
 
 ## License

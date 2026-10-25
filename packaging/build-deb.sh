@@ -28,6 +28,9 @@ install -D -m 755 "$repo_root/pc-command-center.sh" "$package_root/usr/bin/pcc"
 install -D -m 644 "$repo_root/pc-command-center.1" "$package_root/usr/share/man/man1/pcc.1"
 install -D -m 644 "$repo_root/readme.md" "$package_root/usr/share/doc/pc-command-center/README.md"
 install -D -m 644 "$repo_root/CHANGELOG.md" "$package_root/usr/share/doc/pc-command-center/changelog.md"
+for profile in daily development low-power; do
+    install -D -m 644 "$repo_root/examples/profiles/$profile.conf" "$package_root/usr/share/doc/pc-command-center/examples/profiles/$profile.conf"
+done
 mkdir -p "$package_root/DEBIAN"
 cat > "$package_root/DEBIAN/control" <<CONTROL
 Package: pc-command-center

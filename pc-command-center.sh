@@ -3,7 +3,7 @@
 # PC Command Center
 # A lightweight terminal dashboard for Ubuntu/Linux systems.
 
-VERSION="4.0.0"
+VERSION="4.1.0"
 REFRESH_INTERVAL=5
 ENABLE_COLOR=1
 ONCE=0
@@ -11,6 +11,11 @@ LAYOUT=auto
 DISK_PATH=/
 NETWORK_INTERFACE=""
 PROCESS_SORT=cpu
+PROFILE=""
+DOCTOR=0
+LIST_PROFILES=0
+CONFIG_WARNINGS=0
+PLAIN_TEXT=""
 PAUSED=0
 HELP_VISIBLE=0
 CPU_WARN=60
@@ -181,6 +186,9 @@ Options:
   --view VIEW         overview|processes|storage|network|pressure
   --format FORMAT     terminal|json|csv; json/csv imply one-shot
   --record PATH       Record live samples to a new CSV file (100 MiB limit)
+  --profile NAME      Load a named profile before CLI overrides (last name wins)
+  --list-profiles     List available named profiles and exit
+  --doctor            Diagnose dependencies, sources, and configuration; no TUI
   --version           Show the version and exit
   --help              Show this help message
 
@@ -191,7 +199,10 @@ Live telemetry:
 
 Configuration:
   ~/.config/pc-command-center.conf (or $XDG_CONFIG_HOME/pc-command-center.conf)
-  Defaults < config < CLI flags. Literal KEY=value entries; no shell expansion.
+  Defaults < base config < selected profile < CLI flags. Literal KEY=value only.
+  Profiles: $XDG_CONFIG_HOME/pc-command-center/profiles/NAME.conf (or ~/.config/...).
+  Names: 1..64 letters/digits/underscore/hyphen, starting with a letter or digit.
+  Profile selection is CLI-only; files never execute shell commands.
   REFRESH_INTERVAL=1..999999, ENABLE_COLOR=0|1, DISK_PATH=directory,
   NETWORK_INTERFACE=interface (empty for all), LAYOUT=auto|compact|mini|micro|tiny|wide.
   CPU_WARN/CPU_CRIT=60/85, RAM_WARN/RAM_CRIT=75/90, DISK_WARN/DISK_CRIT=75/90,
@@ -267,13 +278,14 @@ valid_setting() {
 }
 
 read_config() {
-    local file="${XDG_CONFIG_HOME:-$HOME/.config}/pc-command-center.conf"
+    local file="${1:-${XDG_CONFIG_HOME:-$HOME/.config}/pc-command-center.conf}"
     local line key value metric warn_key crit_key warn crit
     local line_number=0
     local -A thresholds=()
 
     [ -e "$file" ] || return 0
     if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+        CONFIG_WARNINGS=$((CONFIG_WARNINGS + 1))
         printf 'Warning: cannot read config %s; ignored\n' "$file" >&2
         return 0
     fi
@@ -284,6 +296,7 @@ read_config() {
         line=${line%"${line##*[![:space:]]}"}
         [[ -z "$line" || "$line" == \#* ]] && continue
         if ! [[ "$line" =~ ^([A-Z][A-Z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+            CONFIG_WARNINGS=$((CONFIG_WARNINGS + 1))
             printf 'Warning: %s:%s: invalid config entry; ignored\n' "$file" "$line_number" >&2
             continue
         fi
@@ -293,6 +306,7 @@ read_config() {
             value=${value:1:${#value}-2}
         fi
         if ! valid_setting "$key" "$value"; then
+            CONFIG_WARNINGS=$((CONFIG_WARNINGS + 1))
             printf 'Warning: %s:%s: invalid %s; ignored\n' "$file" "$line_number" "$key" >&2
             continue
         fi
@@ -315,6 +329,7 @@ read_config() {
             printf -v "$warn_key" '%s' "$warn"
             printf -v "$crit_key" '%s' "$crit"
         else
+            CONFIG_WARNINGS=$((CONFIG_WARNINGS + 1))
             printf 'Warning: %s: invalid %s thresholds; pair ignored\n' "$file" "$metric" >&2
         fi
     done
@@ -323,6 +338,12 @@ read_config() {
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
+            --profile)
+                [ "$#" -ge 2 ] || die "--profile requires a name"
+                valid_profile_name "$2" || die "invalid profile name (letters, digits, underscore, hyphen; max 64)"
+                PROFILE=$2; shift 2 ;;
+            --doctor) DOCTOR=1; shift ;;
+            --list-profiles) LIST_PROFILES=1; shift ;;
             --interval)
                 [ "$#" -ge 2 ] || die "--interval requires a value"
                 [[ "$2" =~ ^[0-9]{1,6}$ ]] || die "--interval must be a positive integer (1-999999)"
@@ -452,13 +473,24 @@ repeat_char() {
     printf '%s' "${out// /$char}"
 }
 
+# Use one shared result to avoid launching a process for every width check.
+strip_ansi_text() {
+    local pattern=$'\e''\[[0-9;]*m'
+    PLAIN_TEXT=$1
+    while [[ "$PLAIN_TEXT" =~ $pattern ]]; do
+        PLAIN_TEXT=${PLAIN_TEXT/"${BASH_REMATCH[0]}"/}
+    done
+}
+
 strip_ansi() {
-    printf '%s' "$1" | sed $'s/\033\\[[0-9;]*m//g'
+    strip_ansi_text "$1"
+    printf '%s' "$PLAIN_TEXT"
 }
 
 visible_length() {
     local plain
-    plain=$(strip_ansi "$1")
+    strip_ansi_text "$1"
+    plain=$PLAIN_TEXT
     printf '%s' "${#plain}"
 }
 
@@ -470,7 +502,8 @@ pad_ansi() {
 
     [ "$width" -lt 0 ] && width=0
 
-    plain=$(strip_ansi "$text")
+    strip_ansi_text "$text"
+    plain=$PLAIN_TEXT
     visible=${#plain}
 
     if [ "$visible" -gt "$width" ]; then
@@ -492,7 +525,8 @@ center_ansi() {
     local left
     local right
 
-    visible=$(visible_length "$text")
+    strip_ansi_text "$text"
+    visible=${#PLAIN_TEXT}
     if [ "$visible" -ge "$width" ]; then
         pad_ansi "$text" "$width"
         return
@@ -868,11 +902,9 @@ get_temperature() {
 
 temperature_number() {
     local temp="$1"
-    local number
-
-    number=$(printf '%s' "$temp" | grep -Eo '[0-9]+([.][0-9]+)?' | head -n 1)
-    number=${number%.*}
-    [[ "$number" =~ ^[0-9]+$ ]] && printf '%s' "$number" || printf '0'
+    if [[ "$temp" =~ ([0-9]+)([.][0-9]+)? ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    else printf '0'; fi
 }
 
 metric_line() {
@@ -904,7 +936,8 @@ print_fit_line() {
     local width="$1"
     local text="$2"
 
-    printf '%s\n' "$(pad_ansi "$text" "$width")"
+    pad_ansi "$text" "$width"
+    printf '\n'
 }
 
 panel() {
@@ -1890,7 +1923,8 @@ collect_device() {
 
 read_pressure_source() {
     [ -r "/proc/pressure/$1" ] || return 1
-    cat -- "/proc/pressure/$1" 2>/dev/null
+    local line
+    while IFS= read -r line; do printf '%s\n' "$line"; done 2>/dev/null < "/proc/pressure/$1"
 }
 
 collect_pressure() {
@@ -2165,9 +2199,196 @@ render_focused_view() {
 
 
 
+valid_profile_name() {
+    [[ "$1" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$ ]]
+}
+
+# Resolve the profile before reading either file, regardless of option order.
+# Skip option values so a directory named --profile cannot become a selector.
+select_profile() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --profile)
+                [ "$#" -ge 2 ] || die "--profile requires a name"
+                valid_profile_name "$2" || die "invalid profile name (letters, digits, underscore, hyphen; max 64)"
+                PROFILE=$2; shift 2 ;;
+            --interval|--layout|--disk|--watch-disk|--device|--view|--format|--record)
+                [ "$#" -ge 2 ] || return 0
+                shift 2 ;;
+            *) shift ;;
+        esac
+    done
+}
+
+list_profiles() {
+    local directory="${XDG_CONFIG_HOME:-$HOME/.config}/pc-command-center/profiles" file name count=0
+    printf 'Profiles: %s\n' "$(safe_display "$directory")"
+    for file in "$directory"/*.conf; do
+        [ -f "$file" ] || continue
+        name=${file##*/}; name=${name%.conf}
+        valid_profile_name "$name" || continue
+        printf '  %s\n' "$name"
+        count=$((count + 1))
+    done
+    [ "$count" -gt 0 ] || printf '  (none; create NAME.conf in this directory)\n'
+    return 0
+}
+
+doctor_line() {
+    printf '%-5s %-17s %s\n' "$1" "$2" "$(safe_display "$3")"
+}
+
+doctor_file() {
+    local path=$1 label=$2 advice=$3
+    if [ -r "$path" ]; then doctor_line OK "$label" "$path is readable"
+    else doctor_line WARN "$label" "$path unavailable; $advice"; fi
+}
+
+doctor_probe() {
+    # All command probes have a deadline; never run install/configuration tools.
+    command -v timeout >/dev/null 2>&1 || return 125
+    LC_ALL=C timeout -k 1 2 "$@" 2>/dev/null
+}
+
+run_doctor() {
+    local command package missing=0 directory config state id resource reading sensors_ok=0 line scope
+    local -a ip_address=(ip -o -4 address show) ip_route=(ip -4 route show default)
+    local required='awk cat date df free getconf grep head hostname ip ps sort sed stty tput uptime whoami timeout mktemp ln rm'
+    printf 'PC Command Center %s diagnostics\n' "$VERSION"
+    printf 'Read-only checks; OK=available, WARN=limited/optional, FAIL=missing requirement.\n'
+    doctor_line INFO Bash "$BASH_VERSION (requires Bash 4+)"
+    printf '\nDependencies\n'
+    for command in $required; do
+        case "$command" in
+            awk) package='mawk or gawk' ;;
+            free|ps|uptime) package=procps ;;
+            ip) package=iproute2 ;;
+            tput) package=ncurses-bin ;;
+            hostname) package=hostname ;;
+            grep|sed) package=$command ;;
+            *) package=coreutils ;;
+        esac
+        if command -v "$command" >/dev/null 2>&1; then doctor_line OK "$command" available
+        else doctor_line FAIL "$command" "not found in PATH; install $package with your package manager"; missing=$((missing + 1)); fi
+    done
+    directory=${XDG_CONFIG_HOME:-$HOME/.config}
+    config=$directory/pc-command-center.conf
+    printf '\nConfiguration\n'
+    if [ -r "$config" ] && [ -f "$config" ]; then doctor_line OK 'Base config' "$config"
+    elif [ -e "$config" ]; then doctor_line WARN 'Base config' "$config is not a readable regular file; correct its type/permissions"
+    else doctor_line INFO 'Base config' "optional file absent; using defaults ($config)"; fi
+    if [ -n "$PROFILE" ]; then doctor_line OK Profile "$PROFILE ($directory/pc-command-center/profiles/$PROFILE.conf)"
+    else doctor_line INFO Profile 'none selected; use --list-profiles or --profile NAME'; fi
+    if [ "$CONFIG_WARNINGS" -gt 0 ]; then
+        doctor_line WARN Validation "$CONFIG_WARNINGS config entries/pairs ignored; correct the warnings above and rerun --doctor"
+    else doctor_line OK Validation 'no ignored configuration entries'; fi
+    doctor_line INFO Precedence 'defaults < base config < selected profile < CLI'
+    doctor_line INFO Settings "refresh=${REFRESH_INTERVAL}s layout=$LAYOUT color=$ENABLE_COLOR disk=$DISK_PATH"
+
+    printf '\nTerminal and core telemetry\n'
+    if [ -t 0 ] && [ -t 1 ]; then doctor_line OK Terminal 'interactive stdin/stdout'
+    else doctor_line INFO Terminal 'noninteractive; snapshots/--format work, live mode and --record require a TTY'; fi
+    if [ -n "${TERM:-}" ] && [ "$TERM" != dumb ] && command -v tput >/dev/null 2>&1 &&
+        doctor_probe tput -T "$TERM" cols >/dev/null; then
+        doctor_line OK Terminfo "$TERM capabilities available"
+    else doctor_line WARN Terminfo 'missing/unknown TERM or tput capabilities; use a configured terminal or --once --no-color'; fi
+    doctor_file /proc/stat CPU 'use a Linux host with procfs mounted and readable'
+    doctor_file /proc/loadavg Load 'check procfs access; load will show unavailable'
+    doctor_file /proc/uptime Clock 'check procfs access; elapsed sampling needs this source'
+    if command -v free >/dev/null 2>&1 && doctor_probe free -b >/dev/null; then doctor_line OK Memory 'free -b responds'
+    else doctor_line WARN Memory 'free -b failed/timed out; check procps installation and /proc/meminfo access'; fi
+    if command -v ps >/dev/null 2>&1 && doctor_probe ps -p "$$" -o pid= >/dev/null; then doctor_line OK Processes 'ps responds; individual /proc/PID files can still be permission-restricted'
+    else doctor_line WARN Processes 'ps failed/timed out; check procps and procfs permissions'; fi
+
+    printf '\nFilesystems and device I/O\n'
+    if command -v df >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1 && [ -r /proc/self/mountinfo ]; then
+        collect_storage
+        for id in "${STORAGE_IDS[@]}"; do
+            state=${STORAGE_STATE[$id]}
+            case "$state" in
+                valid) doctor_line OK Filesystem "${STORAGE_PATH[$id]}: capacity available (${STORAGE_TYPE[$id]})" ;;
+                unsupported) doctor_line WARN Filesystem "${STORAGE_PATH[$id]}: ${STORAGE_TYPE[$id]} remote/FUSE/autofs probes are unsupported; select a local path" ;;
+                *) doctor_line WARN Filesystem "${STORAGE_PATH[$id]}: missing/changed mount, permission error, or bounded df failure; check the mount and rerun" ;;
+            esac
+            if [ "$state" = valid ] && [ "${STORAGE_VALUE[$id,4]:-0}" -gt 0 ]; then doctor_line OK Inodes "${STORAGE_PATH[$id]}: inode accounting available"
+            else doctor_line WARN Inodes "${STORAGE_PATH[$id]}: no usable inode totals; N/A is expected"; fi
+        done
+    else doctor_line WARN Filesystem 'df/timeout or readable mountinfo unavailable; restore the dependencies/procfs access'; fi
+    if [ -z "$BLOCK_DEVICE" ]; then doctor_line INFO 'Device I/O' 'disabled; choose a kernel device name with --device NAME (not a /dev/path)'
+    elif [ -r /proc/diskstats ] && read_device_counters >/dev/null; then doctor_line OK 'Device I/O' "$BLOCK_DEVICE counters found; two samples are needed for rates"
+    else doctor_line WARN 'Device I/O' "$BLOCK_DEVICE absent/unreadable; check /proc/diskstats and select the correct --device name"; fi
+
+    printf '\nNetwork\n'
+    doctor_file /proc/net/dev 'Byte counters' 'check procfs network access; RX/TX cannot be measured'
+    if [ -n "$NETWORK_INTERFACE" ]; then
+        if [ -e "/sys/class/net/$NETWORK_INTERFACE" ]; then doctor_line OK Interface "$NETWORK_INTERFACE exists"
+        else doctor_line WARN Interface "$NETWORK_INTERFACE disappeared; select an existing interface in config"; fi
+    else doctor_line INFO Interface 'automatic selection from default route/active IPv4; n cycles live interfaces'; fi
+    if command -v ip >/dev/null 2>&1; then
+        scope='all interfaces'
+        if [ -n "$NETWORK_INTERFACE" ]; then
+            scope=$NETWORK_INTERFACE
+            ip_address+=(dev "$NETWORK_INTERFACE"); ip_route+=(dev "$NETWORK_INTERFACE")
+        fi
+        ip_address+=(up scope global)
+        if ! reading=$(doctor_probe "${ip_address[@]}"); then doctor_line WARN IPv4 'ip failed/timed out; check iproute2 and network namespace permissions'
+        elif [ -n "$reading" ]; then doctor_line OK IPv4 "active global IPv4 address available on $scope; rates need two samples"
+        else doctor_line WARN IPv4 "no active global IPv4 address on $scope; connect the interface or inspect network settings"; fi
+        if ! reading=$(doctor_probe "${ip_route[@]}"); then doctor_line WARN Gateway 'route query failed/timed out; check iproute2 and namespace permissions'
+        elif [ -n "$reading" ]; then doctor_line OK Gateway "default IPv4 route available on $scope"
+        else doctor_line WARN Gateway "no default IPv4 route on $scope; gateway N/A is expected (local-only links may be intentional)"; fi
+    fi
+
+    printf '\nOptional hardware and pressure\n'
+    if command -v sensors >/dev/null 2>&1; then
+        if reading=$(doctor_probe sensors); then
+            while IFS= read -r line; do
+                if [[ "$line" =~ (Package\ id\ 0|Core\ 0|temp1) ]]; then
+                    [[ "$line" =~ [+-]?[0-9]+([.][0-9]+)?°?C ]] && sensors_ok=1
+                    break
+                fi
+            done <<< "$reading"
+        fi
+        if [ "$sensors_ok" -eq 1 ]; then doctor_line OK Temperature 'sensors responds with a usable CPU temperature'
+        else doctor_line WARN sensors 'failed/timed out or no usable supported reading; check sensor support/configuration (no automatic changes)'; fi
+    else doctor_line INFO sensors 'optional command absent; install lm-sensors for additional readings'; fi
+    if [ "$sensors_ok" -eq 0 ]; then
+        reading=''
+        if [ -r /sys/class/thermal/thermal_zone0/temp ]; then read -r reading < /sys/class/thermal/thermal_zone0/temp; fi
+        if [[ "$reading" =~ ^[0-9]+$ ]]; then doctor_line OK Temperature 'thermal_zone0 fallback is readable'
+        else doctor_line WARN Temperature 'no supported sensor/fallback; N/A is expected on unsupported or restricted hardware'; fi
+    fi
+    reading=$(read_battery_metrics)
+    if [ -n "$reading" ]; then doctor_line OK Battery "$reading"
+    else doctor_line INFO Battery 'no readable supported battery; expected on desktops or restricted hardware'; fi
+    if [ "$PRESSURE_ENABLED" -eq 0 ]; then doctor_line INFO Pressure 'disabled by PRESSURE_ENABLED=0'
+    else
+        collect_pressure
+        for resource in cpu memory io; do
+            if [ -n "${PRESSURE_VALUES[$resource,some,avg10]:-}" ]; then doctor_line OK Pressure "$resource some averages available"
+            else doctor_line WARN Pressure "$resource unavailable/unsupported; kernel PSI or procfs permissions may limit this source"; fi
+        done
+    fi
+    printf '\nRequired dependencies missing: %s. Optional limitations do not fail this check.\n' "$missing"
+    [ "$missing" -eq 0 ]
+}
+
 main() {
+    select_profile "$@"
     read_config
+    if [ -n "$PROFILE" ]; then
+        local profile_file="${XDG_CONFIG_HOME:-$HOME/.config}/pc-command-center/profiles/$PROFILE.conf"
+        if [ ! -f "$profile_file" ] || [ ! -r "$profile_file" ]; then die "cannot read profile $PROFILE; create $profile_file or use --list-profiles"; fi
+        read_config "$profile_file"
+    fi
     parse_args "$@"
+    if [ "$DOCTOR" -eq 1 ] || [ "$LIST_PROFILES" -eq 1 ]; then
+        if [ "$DOCTOR" -eq 1 ]; then
+            if [ "$OUTPUT_FORMAT" != terminal ] || [ -n "$RECORD_PATH" ]; then die "--doctor cannot be combined with --format json/csv or --record"; fi
+            run_doctor
+        else list_profiles; fi
+        return $?
+    fi
     [ "$OUTPUT_FORMAT" = terminal ] || ONCE=1
     if [ -n "$RECORD_PATH" ] && { [ "$ONCE" -eq 1 ] || [ ! -t 0 ] || [ ! -t 1 ]; }; then
         die "--record requires an interactive terminal and cannot be combined with --once/--format"

@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.1.0 — 2026-10-25
+
+- Add named profiles with defaults < base config < selected profile < CLI precedence.
+- Add read-only `--doctor` diagnostics and `--list-profiles` discovery.
+- Reduce repaint overhead with Bash-only ANSI width checks and direct fitted-line output.
+- Preserve sample publication, process CPU baselines, and existing recording contracts.
+
 ## 4.0.0 — 2026-10-24
 
 - Add bounded session history, sustained warnings, recovery hysteresis, and recent events.

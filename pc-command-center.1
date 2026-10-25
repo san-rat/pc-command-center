@@ -1,4 +1,4 @@
-.TH PCC 1 "October 2026" "PC Command Center 4.0.0" "User Commands"
+.TH PCC 1 "October 2026" "PC Command Center 4.1.0" "User Commands"
 .SH NAME
 pcc \- lightweight terminal dashboard for Linux system status
 .SH SYNOPSIS
@@ -56,6 +56,18 @@ Select terminal (default), json, or csv. JSON and CSV imply one-shot output.
 .BI \-\-record " PATH"
 Record completed live samples in a new private CSV file, limited to 100 MiB.
 Requires interactive stdin/stdout and cannot be combined with one-shot output.
+.TP
+.BI \-\-profile " NAME"
+Select a literal configuration profile. Last profile wins; all CLI flags override
+profile settings regardless of argument order. A missing profile is an error.
+.TP
+.B \-\-list-profiles
+List valid profile names and exit without collecting telemetry.
+.TP
+.B \-\-doctor
+Print read-only dependency, configuration, terminal and telemetry diagnostics.
+Does not start the TUI, sampling, recording, installation or automatic repair.
+Cannot be combined with JSON/CSV output or recording.
 .TP
 .B \-\-version
 Print the version and exit.
@@ -156,7 +168,7 @@ The optional configuration file is
 If
 .B XDG_CONFIG_HOME
 is set, the file is read from that directory instead. Defaults are overridden
-by configuration values, then by command-line options. Entries use literal
+by base configuration values, then a selected profile, then command-line options. Entries use literal
 .BR KEY=value
 syntax; shell expansion and command substitution are not performed.
 .PP
@@ -191,6 +203,39 @@ Explicit kernel device name; empty disables device throughput.
 .TP
 .B WATCH_DISK_1 through WATCH_DISK_8
 One existing directory per key; defaults are unset. Values are literal paths.
+.SH PROFILES
+Profiles live in ~/.config/pc-command-center/profiles/NAME.conf, or beneath
+XDG_CONFIG_HOME when set. Names have 1-64 ASCII letters/digits/underscore/hyphen,
+starting with a letter or digit. Paths and expansions are not accepted. No profile
+is selected automatically. Files must be readable regular files and use the same
+literal keys/parser as the base config; they never execute commands or include
+other profiles. Invalid threshold pairs retain inherited settings.
+.PP
+Precedence: defaults < base config < selected profile < CLI. Individual WATCH_DISK
+keys override matching inherited entries; the first CLI --watch-disk replaces the
+whole extra selection. Selection is resolved before loading files.
+.PP
+Editable daily, development and low-power examples are installed under
+PREFIX/share/doc/pc-command-center/examples/profiles (Debian: /usr/share/doc/...).
+Copy them to the user profiles directory before selecting them. Low-power reduces
+monitoring overhead; battery savings are not guaranteed.
+.SH DIAGNOSTICS
+Doctor reports OK (available), INFO (expected condition), WARN (limited or optional)
+and FAIL (missing required command). It checks runtime commands, effective config,
+procfs, terminal, memory/process tools, filesystems/inodes, device counters, IPv4,
+temperature, battery and optional pressure, with next steps for limited sources.
+Command probes use a two-second timeout plus one-second termination grace. Multiple
+slow probes can extend total diagnostic time. No privileged/configuration tools run.
+.PP
+Doctor exits 1 for missing required commands, otherwise 0. Optional missing hardware
+and ignored config entries remain warnings. Throughput requires two samples, and
+per-process permissions or device availability may change after diagnosis.
+.SH RESPONSIVENESS
+Cached repaint width checks use Bash builtins and fitted lines avoid extra command
+substitutions. Sampling correctness and existing formats are preserved. Collection
+remains synchronous; process scans and bounded filesystem probes can delay input.
+The optional development script tests/latency.py measures collection, cached render,
+handler and terminal key-to-frame latency. Host load and resource count affect timing.
 .SH STRUCTURED OUTPUT
 Schema version 1 contains schema_version, app_version, session_id, sample_sequence,
 timestamp_utc, elapsed_ms, interval_ms, text_encoding, disk_path, interface, and
@@ -216,7 +261,8 @@ a persistent error, and sets the eventual exit status to 1. Failure to start exi
 before terminal setup. Descriptors close on quit/SIGINT/SIGTERM; durability after
 power loss and a final row after SIGKILL are not guaranteed.
 .SH EXIT STATUS
-Zero on normal completion; one for argument errors, failed recording startup, or
+Zero on normal completion (or doctor without missing requirements); one for
+argument/profile errors, missing required commands in doctor, failed recording startup, or
 recording failure/size limit during the session.
 .SH EXAMPLES
 .TP
